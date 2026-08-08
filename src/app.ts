@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Request } from 'express'
 import compression from 'compression'
+import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import express from 'express'
 import helmet from 'helmet'
@@ -10,6 +11,7 @@ import { logger } from './config/logger.js'
 import { errorHandler } from './middlewares/error-handler.js'
 import { notFoundHandler } from './middlewares/not-found.js'
 import { requestId } from './middlewares/request-id.js'
+import { apiRateLimiter } from './middlewares/auth.js'
 import { routes } from './routes/index.js'
 
 export function createApp(): express.Express {
@@ -39,6 +41,9 @@ export function createApp(): express.Express {
   )
   app.use(express.json({ limit: '100kb' }))
   app.use(express.urlencoded({ extended: true, limit: '100kb' }))
+  app.use(cookieParser())
+
+  app.use(apiRateLimiter())
 
   app.use('/', routes)
 

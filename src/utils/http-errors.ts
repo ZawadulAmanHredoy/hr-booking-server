@@ -20,14 +20,14 @@ export class BadRequestError extends AppError {
 }
 
 export class UnauthorizedError extends AppError {
-  constructor(message = 'Authentication is required.') {
-    super(401, 'UNAUTHORIZED', message)
+  constructor(message = 'Authentication is required.', details?: unknown) {
+    super(401, 'UNAUTHORIZED', message, details)
   }
 }
 
 export class ForbiddenError extends AppError {
-  constructor(message = 'You do not have permission to perform this action.') {
-    super(403, 'FORBIDDEN', message)
+  constructor(message = 'You do not have permission to perform this action.', details?: unknown) {
+    super(403, 'FORBIDDEN', message, details)
   }
 }
 

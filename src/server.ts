@@ -50,9 +50,6 @@ async function bootstrap(): Promise<void> {
 }
 
 void bootstrap().catch((err) => {
-  logger.fatal(
-    { err: err instanceof Error ? err.message : err },
-    'Failed to start server',
-  )
+  logger.fatal({ err: err instanceof Error ? err.message : err }, 'Failed to start server')
   process.exit(1)
 })

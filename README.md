@@ -5,6 +5,7 @@ Backend API for the HR consultation booking platform. Built with Node.js, Expres
 ## Status
 
 Phase 1 (Foundation) — Express + TypeScript scaffold with:
+
 - Health checks (`/health`, `/health/ready`)
 - Centralized error handling + consistent API response format
 - Zod-validated environment configuration
@@ -75,15 +76,15 @@ The API listens on `http://localhost:5000` by default.
 
 ## Scripts
 
-| Script            | Description                          |
-| ----------------- | ------------------------------------ |
-| `npm run dev`     | Start dev server with hot reload     |
-| `npm run build`   | Compile TypeScript to `dist/`        |
-| `npm start`       | Run the compiled server              |
-| `npm run lint`    | ESLint                               |
-| `npm run typecheck` | TypeScript strict type check       |
-| `npm run format`  | Prettier write                       |
-| `npm test`        | Run Vitest suite                     |
+| Script              | Description                      |
+| ------------------- | -------------------------------- |
+| `npm run dev`       | Start dev server with hot reload |
+| `npm run build`     | Compile TypeScript to `dist/`    |
+| `npm start`         | Run the compiled server          |
+| `npm run lint`      | ESLint                           |
+| `npm run typecheck` | TypeScript strict type check     |
+| `npm run format`    | Prettier write                   |
+| `npm test`          | Run Vitest suite                 |
 
 ## Health Checks
 

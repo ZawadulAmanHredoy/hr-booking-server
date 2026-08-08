@@ -11,10 +11,6 @@ export function sendSuccess<T>(res: Response, data: T, statusCode = 200): Respon
   return res.status(statusCode).json({ success: true, data })
 }
 
-export function sendPaginated<T>(
-  res: Response,
-  data: T,
-  pagination: Pagination,
-): Response {
+export function sendPaginated<T>(res: Response, data: T, pagination: Pagination): Response {
   return res.status(200).json({ success: true, data, pagination })
 }
