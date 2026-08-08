@@ -261,6 +261,7 @@ Everything below is written from the actual code (not the original plan).
   12 meeting (conference payload, token refresh, no-connection and outage paths, retry,
   reschedule PATCH, cancel DELETE, list projection) — **113 total**
 - **Verification:** lint ✅ typecheck ✅ **113/113 tests** ✅ build ✅ format ✅
+- Repo: `adf2743` — _feat(meetings): Google Meet integration behind a provider abstraction_
 
 ### Client
 
@@ -277,6 +278,7 @@ Everything below is written from the actual code (not the original plan).
   503 when the server has no Google credentials, callback redirects for bad state and declined
   consent, booking succeeding with a `FAILED` meeting and a working retry, and cancel propagating
   to the meeting
+- Repo: `896422e` — _feat(meetings): Google Calendar connection and meeting links_
 
 ---
 
