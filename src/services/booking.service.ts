@@ -12,17 +12,16 @@ import {
 import { logger } from '../config/logger.js'
 import { Booking, buildSlotKey, type BookingDocument } from '../models/Booking.js'
 import { HRProfile } from '../models/HRProfile.js'
+import { User } from '../models/User.js'
 import type { UserDocument } from '../models/User.js'
 import type { AvailabilityDocument } from '../models/Availability.js'
 import { getAvailabilityForHr } from './availability.service.js'
 import { isOfferedSlot } from './slot.service.js'
 import {
-  cancelMeetingForBooking,
   ensureMeetingForBooking,
   getMeetingForBooking,
   getMeetingsForBookings,
   isRetryable,
-  syncMeetingTimes,
   toMeetingResponse,
 } from './meeting.service.js'
 import type { MeetingDocument } from '../models/Meeting.js'
@@ -40,6 +39,14 @@ import type {
   ListBookingsQuery,
   RescheduleBookingInput,
 } from '../validators/booking.validator.js'
+import { getMeetingQueue } from '../queues/meeting.queue.js'
+import { getReminderQueue, REMINDER_LEAD_MS, reminderJobId } from '../queues/reminder.queue.js'
+import { enqueueEmail } from './email/index.js'
+import {
+  buildBookingConfirmation,
+  buildBookingCancellation,
+  buildBookingReschedule,
+} from './email/templates/booking.templates.js'
 
 const DUPLICATE_KEY = 11000
 const TERMINAL_STATUSES = [
@@ -103,9 +110,7 @@ export async function createBooking(
     'Booking created',
   )
 
-  // The conference is best-effort: `ensureMeetingForBooking` records provider failures on the
-  // meeting instead of throwing, so a Google outage never costs the client their slot.
-  await ensureMeetingForBooking(booking.id)
+  await dispatchBookingCreated(booking)
 
   return booking
 }
@@ -203,7 +208,7 @@ export async function cancelBooking(
 
   logger.info({ bookingId: booking.id, cancelledBy: role }, 'Booking cancelled')
 
-  await cancelMeetingForBooking(booking.id)
+  await dispatchBookingCancelled(booking, role)
 
   return getBookingForActor(actor, booking.id)
 }
@@ -278,7 +283,7 @@ export async function rescheduleBooking(
     'Booking rescheduled',
   )
 
-  await syncMeetingTimes(moved.id)
+  await dispatchBookingRescheduled(moved, previousStartAt)
 
   return getBookingForActor(actor, moved.id)
 }
@@ -502,4 +507,139 @@ function rethrowDuplicateSlot(err: unknown): never {
     throw new SlotUnavailableError()
   }
   throw err
+}
+
+async function dispatchBookingCreated(booking: BookingDocument): Promise<void> {
+  const meetingQueue = getMeetingQueue()
+  await meetingQueue.add('create', { bookingId: booking.id as string })
+
+  scheduleReminder(booking.id as string, booking.startAt)
+  await enqueueBookingEmails(booking, 'confirmation')
+}
+
+async function dispatchBookingCancelled(
+  booking: BookingDocument,
+  cancelledBy: CancelledBy,
+): Promise<void> {
+  const meetingQueue = getMeetingQueue()
+  await meetingQueue.add('cancel', { bookingId: booking.id as string })
+
+  removeReminder(booking.id as string)
+  await enqueueBookingEmails(booking, 'cancellation', { cancelledBy })
+}
+
+async function dispatchBookingRescheduled(
+  booking: BookingDocument,
+  previousStartAt: Date,
+): Promise<void> {
+  const meetingQueue = getMeetingQueue()
+  await meetingQueue.add('sync', { bookingId: booking.id as string })
+
+  removeReminder(booking.id as string)
+  scheduleReminder(booking.id as string, booking.startAt)
+  await enqueueBookingEmails(booking, 'reschedule', { previousStartAt })
+}
+
+function scheduleReminder(bookingId: string, startAt: Date): void {
+  const delay = startAt.getTime() - REMINDER_LEAD_MS - Date.now()
+  if (delay <= 0) return
+
+  getReminderQueue()
+    .add('remind', { bookingId }, { jobId: reminderJobId(bookingId), delay })
+    .catch((err) => {
+      logger.warn(
+        { bookingId, err: err instanceof Error ? err.message : err },
+        'Failed to schedule reminder',
+      )
+    })
+}
+
+function removeReminder(bookingId: string): void {
+  getReminderQueue()
+    .remove(reminderJobId(bookingId))
+    .catch(() => {
+      /* Best effort — the job may have already fired or never existed. */
+    })
+}
+
+type EmailKind = 'confirmation' | 'cancellation' | 'reschedule'
+
+interface EmailExtras {
+  cancelledBy?: CancelledBy
+  previousStartAt?: Date
+}
+
+async function enqueueBookingEmails(
+  booking: BookingDocument,
+  kind: EmailKind,
+  extras?: EmailExtras,
+): Promise<void> {
+  try {
+    const users = await User.find({
+      _id: { $in: [booking.userId, booking.hrUserId] },
+    }).select('email firstName lastName')
+
+    const client = users.find((u) => String(u._id) === String(booking.userId))
+    const consultant = users.find((u) => String(u._id) === String(booking.hrUserId))
+    if (!client || !consultant) return
+
+    const base = {
+      bookingId: booking.id as string,
+      startAt: booking.startAt,
+      durationMinutes: booking.durationMinutes,
+      priceCents: booking.priceCents,
+      currency: booking.currency,
+    }
+
+    const pairs: { email: string; name: string; counterpart: string; timezone: string }[] = [
+      {
+        email: client.email,
+        name: client.firstName,
+        counterpart: `${consultant.firstName} ${consultant.lastName}`.trim(),
+        timezone: booking.userTimezone,
+      },
+      {
+        email: consultant.email,
+        name: consultant.firstName,
+        counterpart: `${client.firstName} ${client.lastName}`.trim(),
+        timezone: booking.hrTimezone,
+      },
+    ]
+
+    for (const p of pairs) {
+      const ctx = {
+        ...base,
+        recipientName: p.name,
+        counterpartName: p.counterpart,
+        recipientTimezone: p.timezone,
+      }
+
+      let built: { subject: string; html: string }
+      switch (kind) {
+        case 'confirmation':
+          built = buildBookingConfirmation(ctx)
+          break
+        case 'cancellation':
+          built = buildBookingCancellation({
+            ...ctx,
+            cancelledBy: extras?.cancelledBy ?? 'SYSTEM',
+            reason: booking.cancellationReason,
+          })
+          break
+        case 'reschedule':
+          built = buildBookingReschedule({
+            ...ctx,
+            previousStartAt: extras?.previousStartAt ?? booking.startAt,
+          })
+          break
+      }
+
+      enqueueEmail({ to: p.email, ...built })
+    }
+  } catch (err) {
+    logger.warn(
+      { bookingId: booking.id, err: err instanceof Error ? err.message : err },
+      'Failed to enqueue booking emails',
+    )
+  }
 }

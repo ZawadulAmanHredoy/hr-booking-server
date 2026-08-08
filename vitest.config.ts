@@ -14,6 +14,9 @@ export default defineConfig({
     env: {
       GOOGLE_CLIENT_ID: 'test-google-client-id',
       GOOGLE_CLIENT_SECRET: 'test-google-client-secret',
+      // Keeps test jobs out of the default `bull:` namespace. Without this a dev server running
+      // against the same Redis consumes them before the assertions can see them.
+      QUEUE_PREFIX: 'bull-test',
     },
   },
 })

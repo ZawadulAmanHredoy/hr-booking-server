@@ -3,6 +3,9 @@ import { logger } from '../../config/logger.js'
 import type { EmailMessage, EmailTransport } from './email.service.js'
 import { ConsoleTransport } from './transports/console.transport.js'
 import { SmtpTransport } from './transports/smtp.transport.js'
+import { getEmailQueue } from '../../queues/email.queue.js'
+
+export type { EmailMessage }
 
 let transport: EmailTransport | null = null
 
@@ -22,4 +25,15 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
       'Failed to send email',
     )
   }
+}
+
+export function enqueueEmail(message: EmailMessage): void {
+  getEmailQueue()
+    .add('send', message)
+    .catch((err) => {
+      logger.error(
+        { err: err instanceof Error ? err.message : err, to: message.to, subject: message.subject },
+        'Failed to enqueue email',
+      )
+    })
 }

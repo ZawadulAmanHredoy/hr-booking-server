@@ -4,13 +4,18 @@ import { connectDatabase, disconnectDatabase } from './config/database.js'
 import { env } from './config/env.js'
 import { logger } from './config/logger.js'
 import { connectRedis, disconnectRedis } from './config/redis.js'
+import { startWorkers, stopWorkers } from './jobs/index.js'
 
 async function bootstrap(): Promise<void> {
   await connectDatabase()
   try {
     await connectRedis()
+    await startWorkers()
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : err }, 'Redis unavailable at startup')
+    logger.warn(
+      { err: err instanceof Error ? err.message : err },
+      'Redis/workers unavailable at startup',
+    )
   }
 
   const app = createApp()
@@ -33,8 +38,14 @@ async function bootstrap(): Promise<void> {
     forceExit.unref()
 
     server.close(() => {
-      disconnectRedis()
-      void disconnectDatabase()
+      void stopWorkers()
+        .catch((err) => {
+          logger.error({ err: err instanceof Error ? err.message : err }, 'Error stopping workers')
+        })
+        .then(() => {
+          disconnectRedis()
+          return disconnectDatabase()
+        })
         .catch((err) => {
           logger.error({ err: err instanceof Error ? err.message : err }, 'Error closing MongoDB')
         })

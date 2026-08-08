@@ -7,6 +7,9 @@ const envSchema = z
     PORT: z.coerce.number().int().positive().default(5000),
     MONGO_URI: z.url().default('mongodb://127.0.0.1:27017/hr_booking'),
     REDIS_URL: z.url().default('redis://127.0.0.1:6379'),
+    // BullMQ key namespace. Environments sharing one Redis must not share a prefix, or their
+    // workers will consume each other's jobs.
+    QUEUE_PREFIX: z.string().min(1).max(40).default('bull'),
     CLIENT_URL: z.url().default('http://localhost:5173'),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 

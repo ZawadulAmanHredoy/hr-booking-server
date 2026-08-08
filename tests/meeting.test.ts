@@ -13,6 +13,11 @@ import { Availability } from '../src/models/Availability.js'
 import { Booking } from '../src/models/Booking.js'
 import { Meeting } from '../src/models/Meeting.js'
 import { OAuthAccount } from '../src/models/OAuthAccount.js'
+import {
+  ensureMeetingForBooking,
+  syncMeetingTimes,
+  cancelMeetingForBooking,
+} from '../src/services/meeting.service.js'
 
 const app = createApp()
 
@@ -193,12 +198,18 @@ describe('Meeting creation on booking', () => {
     const [slot] = await fetchSlots(hr.profileId)
 
     const res = await book(client.id, hr.profileId, slot)
-
     expect(res.status).toBe(201)
-    expect(res.body.data.booking.meeting.status).toBe('CREATED')
-    expect(res.body.data.booking.meeting.provider).toBe('GOOGLE_MEET')
-    expect(res.body.data.booking.meeting.meetingUrl).toBe(MEET_URL)
-    expect(res.body.data.booking.canRetryMeeting).toBe(false)
+    const bookingId = res.body.data.booking.id
+
+    await ensureMeetingForBooking(bookingId)
+    const detail = await request(app)
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set(bearer(client.id, 'USER'))
+
+    expect(detail.body.data.booking.meeting.status).toBe('CREATED')
+    expect(detail.body.data.booking.meeting.provider).toBe('GOOGLE_MEET')
+    expect(detail.body.data.booking.meeting.meetingUrl).toBe(MEET_URL)
+    expect(detail.body.data.booking.canRetryMeeting).toBe(false)
   })
 
   it('asks Google for a hangoutsMeet conference with both attendees', async () => {
@@ -206,7 +217,9 @@ describe('Meeting creation on booking', () => {
     const client = await createUser(USER_ROLES.USER, `${prefix}-payload-user@example.com`)
     const [slot] = await fetchSlots(hr.profileId)
 
-    await book(client.id, hr.profileId, slot)
+    const res = await book(client.id, hr.profileId, slot)
+    calls.length = 0
+    await ensureMeetingForBooking(res.body.data.booking.id)
 
     const insert = calls.find((call) => call.method === 'POST' && call.url.includes('/events'))
     expect(insert).toBeDefined()
@@ -229,7 +242,9 @@ describe('Meeting creation on booking', () => {
     const client = await createUser(USER_ROLES.USER, `${prefix}-refresh-user@example.com`)
     const [slot] = await fetchSlots(hr.profileId)
 
-    await book(client.id, hr.profileId, slot)
+    const res = await book(client.id, hr.profileId, slot)
+    calls.length = 0
+    await ensureMeetingForBooking(res.body.data.booking.id)
 
     expect(calls[0]?.url).toBe('https://oauth2.googleapis.com/token')
     const stored = await OAuthAccount.findOne({ userId: hr.userId })
@@ -242,12 +257,18 @@ describe('Meeting creation on booking', () => {
     const [slot] = await fetchSlots(hr.profileId)
 
     const res = await book(client.id, hr.profileId, slot)
+    const bookingId = res.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
+
+    const detail = await request(app)
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set(bearer(client.id, 'USER'))
 
     expect(res.status).toBe(201)
-    expect(res.body.data.booking.status).toBe('CONFIRMED')
-    expect(res.body.data.booking.meeting.status).toBe('FAILED')
-    expect(res.body.data.booking.meeting.lastError).toContain('has not connected')
-    expect(res.body.data.booking.canRetryMeeting).toBe(true)
+    expect(detail.body.data.booking.status).toBe('CONFIRMED')
+    expect(detail.body.data.booking.meeting.status).toBe('FAILED')
+    expect(detail.body.data.booking.meeting.lastError).toContain('has not connected')
+    expect(detail.body.data.booking.canRetryMeeting).toBe(true)
   })
 
   it('keeps the booking when Google is failing', async () => {
@@ -257,11 +278,17 @@ describe('Meeting creation on booking', () => {
     calendarFailureStatus = 500
 
     const res = await book(client.id, hr.profileId, slot)
+    const bookingId = res.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
+
+    const detail = await request(app)
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set(bearer(client.id, 'USER'))
 
     expect(res.status).toBe(201)
-    expect(res.body.data.booking.status).toBe('CONFIRMED')
-    expect(res.body.data.booking.meeting.status).toBe('FAILED')
-    expect(res.body.data.booking.meeting.lastError).toContain('Calendar is unavailable')
+    expect(detail.body.data.booking.status).toBe('CONFIRMED')
+    expect(detail.body.data.booking.meeting.status).toBe('FAILED')
+    expect(detail.body.data.booking.meeting.lastError).toContain('Calendar is unavailable')
   })
 })
 
@@ -272,11 +299,17 @@ describe('POST /api/v1/bookings/:id/meeting/retry', () => {
     const [slot] = await fetchSlots(hr.profileId)
     calendarFailureStatus = 503
     const created = await book(client.id, hr.profileId, slot)
-    expect(created.body.data.booking.meeting.status).toBe('FAILED')
+    const bookingId = created.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
+
+    const failDetail = await request(app)
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set(bearer(client.id, 'USER'))
+    expect(failDetail.body.data.booking.meeting.status).toBe('FAILED')
 
     calendarFailureStatus = null
     const res = await request(app)
-      .post(`/api/v1/bookings/${created.body.data.booking.id}/meeting/retry`)
+      .post(`/api/v1/bookings/${bookingId}/meeting/retry`)
       .set(bearer(client.id, 'USER'))
 
     expect(res.status).toBe(200)
@@ -289,9 +322,11 @@ describe('POST /api/v1/bookings/:id/meeting/retry', () => {
     const client = await createUser(USER_ROLES.USER, `${prefix}-noretry-user@example.com`)
     const [slot] = await fetchSlots(hr.profileId)
     const created = await book(client.id, hr.profileId, slot)
+    const bookingId = created.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
 
     const res = await request(app)
-      .post(`/api/v1/bookings/${created.body.data.booking.id}/meeting/retry`)
+      .post(`/api/v1/bookings/${bookingId}/meeting/retry`)
       .set(bearer(client.id, 'USER'))
 
     expect(res.status).toBe(409)
@@ -318,12 +353,19 @@ describe('Meeting follows the booking lifecycle', () => {
     const client = await createUser(USER_ROLES.USER, `${prefix}-move-user@example.com`)
     const slots = await fetchSlots(hr.profileId)
     const created = await book(client.id, hr.profileId, slots[0])
+    const bookingId = created.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
     calls.length = 0
 
-    const res = await request(app)
-      .patch(`/api/v1/bookings/${created.body.data.booking.id}/reschedule`)
+    await request(app)
+      .patch(`/api/v1/bookings/${bookingId}/reschedule`)
       .set(bearer(client.id, 'USER'))
       .send({ startAt: slots[1] })
+
+    await syncMeetingTimes(bookingId)
+    const res = await request(app)
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set(bearer(client.id, 'USER'))
 
     expect(res.status).toBe(200)
     expect(res.body.data.booking.meeting.status).toBe('CREATED')
@@ -339,12 +381,19 @@ describe('Meeting follows the booking lifecycle', () => {
     const client = await createUser(USER_ROLES.USER, `${prefix}-cancel-user@example.com`)
     const [slot] = await fetchSlots(hr.profileId)
     const created = await book(client.id, hr.profileId, slot)
+    const bookingId = created.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
     calls.length = 0
 
-    const res = await request(app)
-      .patch(`/api/v1/bookings/${created.body.data.booking.id}/cancel`)
+    await request(app)
+      .patch(`/api/v1/bookings/${bookingId}/cancel`)
       .set(bearer(client.id, 'USER'))
       .send({})
+
+    await cancelMeetingForBooking(bookingId)
+    const res = await request(app)
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set(bearer(client.id, 'USER'))
 
     expect(res.status).toBe(200)
     expect(res.body.data.booking.status).toBe('CANCELLED')
@@ -357,12 +406,19 @@ describe('Meeting follows the booking lifecycle', () => {
     const client = await createUser(USER_ROLES.USER, `${prefix}-cancelfail-user@example.com`)
     const [slot] = await fetchSlots(hr.profileId)
     const created = await book(client.id, hr.profileId, slot)
+    const bookingId = created.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
     calendarFailureStatus = 500
 
-    const res = await request(app)
-      .patch(`/api/v1/bookings/${created.body.data.booking.id}/cancel`)
+    await request(app)
+      .patch(`/api/v1/bookings/${bookingId}/cancel`)
       .set(bearer(client.id, 'USER'))
       .send({})
+
+    await cancelMeetingForBooking(bookingId)
+    const res = await request(app)
+      .get(`/api/v1/bookings/${bookingId}`)
+      .set(bearer(client.id, 'USER'))
 
     expect(res.status).toBe(200)
     expect(res.body.data.booking.status).toBe('CANCELLED')
@@ -374,13 +430,15 @@ describe('Meeting follows the booking lifecycle', () => {
     const client = await createUser(USER_ROLES.USER, `${prefix}-list-user@example.com`)
     const [slot] = await fetchSlots(hr.profileId)
     const created = await book(client.id, hr.profileId, slot)
+    const bookingId = created.body.data.booking.id
+    await ensureMeetingForBooking(bookingId)
 
     const res = await request(app)
       .get('/api/v1/bookings')
       .query({ scope: 'upcoming' })
       .set(bearer(client.id, 'USER'))
 
-    const entry = res.body.data.find((b: { id: string }) => b.id === created.body.data.booking.id)
+    const entry = res.body.data.find((b: { id: string }) => b.id === bookingId)
     expect(entry.meeting.meetingUrl).toBe(MEET_URL)
   })
 })
