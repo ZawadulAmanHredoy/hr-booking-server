@@ -1,6 +1,6 @@
 # Architecture — HR Booking
 
-> Code-level architecture written from the actual implementation (Phase 1 + Phase 2).
+> Code-level architecture written from the actual implementation (Phases 1–4).
 > Last updated: 2026-08-08.
 
 ## 1. System overview
@@ -12,11 +12,12 @@
 └──────────┬───────────┘      └──────────┬───────────┘
            │ /api, /health (proxy)       │
            │                             │
-           │                  ┌──────────┴──────────────┐
-           │                  │ MongoDB (users, tokens) │
-           │                  │ Redis (future queues)   │
-           │                  │ SMTP (Mailpit dev)      │
-           └──────────────────┴─────────────────────────┘
+           │                  ┌──────────┴──────────────────────────────────┐
+           │                  │ MongoDB (users, tokens, profiles,           │
+           │                  │          availability, bookings)            │
+           │                  │ Redis (future queues)                       │
+           │                  │ SMTP (Mailpit dev)                          │
+           └──────────────────┴─────────────────────────────────────────────┘
 ```
 
 - Dev: Vite dev server (5173) proxies `/api` and `/health` → `http://localhost:5000`.
@@ -57,6 +58,7 @@ All domain errors extend `AppError` (`src/utils/http-errors.ts`): `BadRequestErr
 `UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError`, `ValidationError`.
 
 `errorHandler` ordering (`src/middlewares/error-handler.ts`):
+
 1. `AppError` → its `statusCode`/`code`/`message`/`details`
 2. `ZodError` → 400 `VALIDATION_ERROR` with `err.flatten()`
 3. body-parser `entity.too.large` → 413 `PAYLOAD_TOO_LARGE`
@@ -79,29 +81,81 @@ All domain errors extend `AppError` (`src/utils/http-errors.ts`): `BadRequestErr
 ### 2.4 Data models (`src/models/`)
 
 **User**
-| field | notes |
-| --- | --- |
-| email | unique, lowercase, indexed |
-| password | argon2id hash, `select: false` |
-| firstName / lastName | trimmed, ≤50 |
-| role | enum, default `USER`, indexed |
-| status | enum, default `ACTIVE`, indexed |
-| isEmailVerified / emailVerifiedAt | |
-| phone, profileImageUrl | optional |
-| failedLoginAttempts / lockedUntil | lockout state |
+
+| field                             | notes                           |
+| --------------------------------- | ------------------------------- |
+| email                             | unique, lowercase, indexed      |
+| password                          | argon2id hash, `select: false`  |
+| firstName / lastName              | trimmed, ≤50                    |
+| role                              | enum, default `USER`, indexed   |
+| status                            | enum, default `ACTIVE`, indexed |
+| isEmailVerified / emailVerifiedAt |                                 |
+| phone, profileImageUrl            | optional                        |
+| failedLoginAttempts / lockedUntil | lockout state                   |
 
 **RefreshToken**
-| field | notes |
-| --- | --- |
-| userId | ref User, indexed |
-| tokenHash | sha-256 of the raw token, unique |
-| expiresAt | indexed + **TTL index** (`expireAfterSeconds: 0`) for auto-cleanup |
-| revokedAt / replacedByTokenHash | rotation chain |
-| userAgent / ip | device context |
+
+| field                           | notes                                                              |
+| ------------------------------- | ------------------------------------------------------------------ |
+| userId                          | ref User, indexed                                                  |
+| tokenHash                       | sha-256 of the raw token, unique                                   |
+| expiresAt                       | indexed + **TTL index** (`expireAfterSeconds: 0`) for auto-cleanup |
+| revokedAt / replacedByTokenHash | rotation chain                                                     |
+| userAgent / ip                  | device context                                                     |
+
+**HRProfile**
+
+| field                                       | notes                                            |
+| ------------------------------------------- | ------------------------------------------------ |
+| userId                                      | ref User, unique                                 |
+| headline / bio                              | ≤80 / ≤2000 chars                                |
+| specializations                             | enum array, 1–5                                  |
+| yearsOfExperience                           | 0–70                                             |
+| hourlyRateCents / currency                  | pricing basis for bookings                       |
+| languages / city / country / certifications | profile detail                                   |
+| status                                      | `DRAFT` \| `PUBLISHED`, only PUBLISHED is public |
+| isAvailable                                 | consultant accepts new bookings                  |
+| rating / ratingCount                        | populated in a later phase                       |
+
+Indexes: `specializations`, `status+rating`, `status+hourlyRateCents`.
+
+**Availability**
+
+| field                             | notes                                                                                   |
+| --------------------------------- | --------------------------------------------------------------------------------------- |
+| hrUserId                          | ref User, unique                                                                        |
+| timezone                          | IANA zone the working hours are written in                                              |
+| slotDurationMinutes               | 15 / 30 / 45 / 60 / 90                                                                  |
+| bufferMinutes                     | gap appended after each slot                                                            |
+| minNoticeMinutes / maxAdvanceDays | booking window                                                                          |
+| weeklyHours                       | `[{ weekday 0–6, intervals: [{ start: 'HH:mm', end: 'HH:mm' }] }]`                      |
+| blockedDates                      | `[{ date: 'YYYY-MM-DD', startTime?, endTime?, reason? }]` — full day when times omitted |
+
+An empty `weeklyHours` means nothing is bookable; the record is created empty on first read.
+
+**Booking**
+
+| field                                          | notes                                                       |
+| ---------------------------------------------- | ----------------------------------------------------------- |
+| userId / hrUserId / hrProfileId                | participants and the profile booked                         |
+| startAt / endAt                                | **UTC** instants                                            |
+| durationMinutes                                | snapshot of the slot length                                 |
+| hrTimezone / userTimezone                      | display zones captured at booking time                      |
+| status                                         | `PENDING`, `CONFIRMED`, `CANCELLED`, `COMPLETED`, `NO_SHOW` |
+| priceCents / currency                          | hourly rate prorated to the slot                            |
+| meetingProvider                                | `GOOGLE_MEET` \| `ZOOM` (link created in Phase 5)           |
+| notes                                          | client's agenda, ≤1000 chars                                |
+| slotKey                                        | `${hrUserId}:${startAt}` — **present only while active**    |
+| cancelledAt / cancelledBy / cancellationReason | cancellation record                                         |
+| previousStartAt / rescheduleCount              | reschedule history                                          |
+
+Indexes: **unique sparse** `slotKey`, `userId+startAt`, `hrUserId+startAt`,
+`hrUserId+status+startAt`, `status+startAt`.
 
 ### 2.5 Auth flow (`src/services/auth.service.ts` + middleware)
 
 Tokens:
+
 - Access: JWT 15 min, `{ sub, role, type: 'access' }`, signed `JWT_ACCESS_SECRET`.
 - Verify-email: JWT 24 h, `{ sub, type: 'verify-email' }`.
 - Reset-password: JWT 1 h, `{ sub, type: 'reset-password' }`.
@@ -115,6 +169,7 @@ simplification — there are no dedicated verify/reset secrets.
 → 201. Duplicate email → 409 `EMAIL_ALREADY_REGISTERED`.
 
 **login** → find by email:
+
 - unknown email → simulate 150 ms delay (timing anti-enumeration) → 401
 - suspended → 403 `ACCOUNT_SUSPENDED`
 - locked (`lockedUntil` future) → 401 `ACCOUNT_LOCKED`
@@ -136,8 +191,7 @@ user (must be ACTIVE) → rotate.
 **forgot-password** → always 200 generic message; send only if the account exists (no
 enumeration).
 
-**reset-password** → verify JWT → rehash password → **delete all the user's refresh tokens** →
-200.
+**reset-password** → verify JWT → rehash password → **delete all the user's refresh tokens** → 200.
 
 **GET /auth/me** → `authenticate` (decodes cookie or Bearer access JWT into `req.user`) +
 `loadUser` (re-loads from DB, rejects non-ACTIVE) → returns `toPublicUser` (never includes
@@ -146,7 +200,77 @@ password).
 **RBAC** — `requireRole(...roles)` returns 403 for the wrong role; `loadUser` must run after
 `authenticate`. No route uses it yet.
 
-### 2.6 Email (`src/services/email/`)
+### 2.6 HR profiles (`src/services/hr-profile.service.ts`)
+
+Routes at `/api/v1/profiles`:
+
+| Route                    | Auth                   | Notes                                                                           |
+| ------------------------ | ---------------------- | ------------------------------------------------------------------------------- |
+| `PUT /me`                | any authenticated user | onboarding — creates the profile and upgrades `USER` → `HR`                     |
+| `GET /me`                | `HR`                   | own profile including `status`                                                  |
+| `PATCH /me/publish`      | `HR`                   | DRAFT ⇄ PUBLISHED                                                               |
+| `PATCH /me/availability` | `HR`                   | the coarse "accepting bookings" switch                                          |
+| `GET /`                  | public                 | PUBLISHED only; search, specialization/language/price filters, sort, pagination |
+| `GET /:id`               | public                 | PUBLISHED only                                                                  |
+
+### 2.7 Scheduling and bookings
+
+**Timezones.** Instants are stored and transported in UTC. Working hours are wall-clock `HH:mm`
+strings interpreted in the consultant's IANA `timezone`; `src/utils/datetime.ts` wraps **Luxon**
+(`wallTimeToUtc`, `dateKeysBetween`, `weekdayOfDateKey`, `isValidTimezone`) so no code ever
+computes an offset by hand.
+
+**Slot generation** (`src/services/slot.service.ts`) is a pure function:
+
+```
+generateSlots(config, { rangeStart, rangeEnd, now, busy })
+  earliest = max(rangeStart, now + minNotice)
+  latest   = min(rangeEnd,   now + maxAdvanceDays)
+  for each calendar day in the consultant's zone
+    for each working interval
+      step = slotDuration + buffer
+      drop slots that overrun the interval, fall on a blocked date/range,
+      land outside [earliest, latest), or overlap an active booking
+  dedupe by instant (spring-forward gaps can map two wall times to one instant), sort
+```
+
+`getAvailableSlots` subtracts the consultant's active bookings; `isOfferedSlot` reuses the same
+generator as the server-side gate for every create/reschedule, so a hand-crafted request cannot
+book a time the consultant never published.
+
+**Booking creation** (`src/services/booking.service.ts`) checks, in order: profile is PUBLISHED →
+consultant is accepting → not booking yourself → the slot is offered → the client has no
+overlapping booking → the consultant has no overlapping booking → insert.
+
+**Double-booking protection** — the dev MongoDB runs standalone, so no multi-document
+transactions. Three layers instead:
+
+1. the pre-checks above,
+2. `slotKey` (`${hrUserId}:${startAt}`) under a **unique sparse index** — a duplicate key becomes
+   409 `SLOT_ALREADY_BOOKED`,
+3. a post-insert overlap sweep for partial overlaps: if a conflicting active booking exists with a
+   lower `_id`, the newer one deletes itself and reports the conflict.
+
+Cancelling `$unset`s `slotKey`, which frees the slot immediately.
+
+**Cancellation** requires 60 minutes' notice for clients; consultants and admins may cancel until
+the consultation starts. **Rescheduling** re-runs the offered-slot and conflict checks, moves
+`slotKey` atomically, records `previousStartAt` and increments `rescheduleCount` (max 3).
+
+Routes:
+
+| Route                                       | Auth                   | Notes                                                                     |
+| ------------------------------------------- | ---------------------- | ------------------------------------------------------------------------- |
+| `GET /api/v1/availability/me`               | `HR`                   | creates an empty schedule on first read                                   |
+| `PUT /api/v1/availability/me`               | `HR`                   | full replace, Zod-validated                                               |
+| `GET /api/v1/availability/:profileId/slots` | public                 | `from`/`to` (ISO instant or date), ≤31 days, defaults to the next 14 days |
+| `POST /api/v1/bookings`                     | authenticated          | 201 with the created booking                                              |
+| `GET /api/v1/bookings`                      | authenticated          | `role=user\|hr`, `scope=upcoming\|past\|all`, `status`, paginated         |
+| `GET /api/v1/bookings/:id`                  | participant (or admin) | non-participants get 404, not 403                                         |
+| `PATCH /api/v1/bookings/:id/cancel`         | participant            | optional `reason`                                                         |
+| `PATCH /api/v1/bookings/:id/reschedule`     | participant            | new `startAt`                                                             |
+
+### 2.8 Email (`src/services/email/`)
 
 - `email.service.ts` — `EmailMessage { to, subject, html, text? }`, `EmailTransport` interface.
 - `index.ts` — lazy singleton transport (`console` default, `smtp` if `EMAIL_TRANSPORT=smtp`);
@@ -156,24 +280,35 @@ password).
 - `templates/auth.templates.ts` — verify/reset HTML with `escapeHtml` on the recipient name; links
   point at `${CLIENT_URL}/verify-email?token=…` and `/reset-password?token=…`.
 
-### 2.7 Rate limiting
+### 2.9 Rate limiting
 
 - `apiRateLimiter()`: global, 120 req / 60 s, applied app-wide in `createApp`.
 - `authRateLimiter()`: 10 req / 15 min, applied to the whole `/api/v1/auth` router.
 - Both return a no-op middleware when `NODE_ENV=test` so the test suite isn't throttled.
 
-### 2.8 Seed (`src/scripts/seed.ts`)
+### 2.10 Seed (`src/scripts/seed.ts`)
 
 `npm run seed` → connect DB → if `SUPER_ADMIN_EMAIL`/`SUPER_ADMIN_PASSWORD` set and no such user,
 create a verified `SUPER_ADMIN` (argon2-hashed). Otherwise logs and exits.
 
-### 2.9 Tests (`tests/`)
+### 2.11 Tests (`tests/`)
 
-Vitest + Supertest. `health.test.ts` (4) and `auth.test.ts` (16) boot the app with `createApp()`,
-connect to **live** MongoDB/Redis when reachable (warn otherwise), use unique emails per run, and
-clean up users/tokens in afterAll. Auth tests generate verify/reset tokens directly with
-`signGenericToken` (the dev `JWT_REFRESH_SECRET` is used since email is console-only). Both test
-files run in separate workers, so they share the DB but not Mongoose connections.
+Vitest + Supertest — 83 tests across six files:
+
+| File                   | Count | Covers                                                                      |
+| ---------------------- | ----- | --------------------------------------------------------------------------- |
+| `health.test.ts`       | 4     | liveness/readiness                                                          |
+| `auth.test.ts`         | 16    | register, login, refresh rotation, verify, reset                            |
+| `hrProfile.test.ts`    | 16    | onboarding + role upgrade, RBAC, directory filters                          |
+| `slots.test.ts`        | 13    | **pure** slot generation — timezones, DST, buffers, blocks, notice, horizon |
+| `availability.test.ts` | 14    | availability CRUD validation, public slots endpoint                         |
+| `booking.test.ts`      | 20    | booking lifecycle, concurrent double-booking race, cancel, reschedule       |
+
+API suites boot the app with `createApp()` and connect to **live** MongoDB/Redis when reachable
+(warn otherwise), use a random per-run email prefix, and clean up only their own documents in
+`afterAll`. Auth tests generate verify/reset tokens with `signGenericToken` (the dev
+`JWT_REFRESH_SECRET` is used since email is console-only). `vitest.config.ts` sets
+`fileParallelism: false` because every suite shares the same database.
 
 ---
 
@@ -203,17 +338,30 @@ files run in separate workers, so they share the DB but not Mongoose connections
 
 `RootLayout` wraps every route (header/footer/`<Outlet/>`).
 
-| Route | Guard | Notes |
-| --- | --- | --- |
-| `/` | — | HomePage |
-| `/login`, `/register`, `/forgot-password`, `/reset-password` | `RedirectIfAuthed` | bounce to `/` when logged in |
-| `/verify-email` | — | reads `?token`, calls verify-email |
-| `/hr`, `/about` | — | placeholders |
-| `/dashboard` | `RequireAuth` | placeholder, first protected route |
-| `*` | — | NotFoundPage |
+| Route                                                        | Guard                 | Notes                                                         |
+| ------------------------------------------------------------ | --------------------- | ------------------------------------------------------------- |
+| `/`                                                          | —                     | HomePage                                                      |
+| `/login`, `/register`, `/forgot-password`, `/reset-password` | `RedirectIfAuthed`    | bounce to `/` when logged in                                  |
+| `/verify-email`                                              | —                     | reads `?token`, calls verify-email                            |
+| `/hr`                                                        | —                     | consultant directory (search, filters, sort, pagination)      |
+| `/hr/:id`                                                    | —                     | profile detail + `BookingPanel` (slot picker, notes, confirm) |
+| `/about`                                                     | —                     | placeholder                                                   |
+| `/profile`                                                   | `RequireAuth`         | onboarding / edit HR profile                                  |
+| `/profile/manage`                                            | `RequireAuth`         | publish + accepting-bookings switches                         |
+| `/profile/availability`                                      | `RequireRole(['HR'])` | weekly hours, booking rules, blocked dates                    |
+| `/dashboard`                                                 | `RequireAuth`         | next-up bookings + quick links                                |
+| `/dashboard/bookings`                                        | `RequireAuth`         | upcoming vs past; consultants can flip perspective            |
+| `/dashboard/bookings/:id`                                    | `RequireAuth`         | detail, cancel, reschedule                                    |
+| `*`                                                          | —                     | NotFoundPage                                                  |
 
 Guards (`components/auth/guards.tsx`): `RequireAuth` → `<Navigate to="/login" state={{from}}>`;
-`RedirectIfAuthed` → `<Navigate to="/">`. Login reads `state.from` to return the user.
+`RequireRole` → `/dashboard` on the wrong role; `RedirectIfAuthed` → `<Navigate to="/">`. Login
+reads `state.from` to return the user.
+
+**Time rendering.** The API always returns UTC instants. `lib/datetime.ts` uses only
+`Intl.DateTimeFormat` (no client-side date library) to format and group them in the viewer's own
+timezone, which is also sent along on create/reschedule so it can be stored on the booking. The
+booking detail page shows the viewer's and the consultant's local time side by side.
 
 ### 3.4 UI
 
@@ -234,21 +382,25 @@ components: `AuthShell` (centered card), `FormAlert` (error/success), `AuthBoots
 ## 4. Deployment & CI
 
 ### Docker (server)
+
 Multi-stage: `deps` (npm ci) → `build` (tsc) → `runtime` (`npm ci --omit=dev`, copy `dist`,
 `USER node`, CMD `node dist/server.js`, EXPOSE 5000).
 
 ### Docker (client)
+
 `build` (npm ci + `npm run build`) → `runtime` nginx:1.27-alpine serving `dist` + nginx.conf.
 
 ### docker-compose (from `server/`)
+
 `mongodb` (healthcheck via mongosh) · `redis` (healthcheck ping) · `mailpit` (1025/8025) ·
 `backend` (depends on healthy mongo+redis) · `frontend` (nginx, :8080). Backend env sets
 `CLIENT_URL=http://localhost:8080`; compose comments an `env_file: .env` for real secrets.
 
 ### CI (GitHub Actions, both repos)
+
 Push to `main` + PRs → `setup-node 22` → `npm ci` → lint → typecheck → test (server: with mongo:8
-and redis:7 services; client: none yet) → build. `npm test` on the server therefore runs the
-auth/health suites against fresh service containers.
+and redis:7 services; client: none yet) → build. `npm test` on the server therefore runs the whole
+suite (health, auth, profiles, slots, availability, bookings) against fresh service containers.
 
 ---
 
@@ -260,6 +412,9 @@ auth/health suites against fresh service containers.
 - Enumeration: delayed unknown-email login, generic forgot-password response.
 - Pino redacts auth material from logs; Mongo URI redacted.
 - Helmet, CORS restricted to one origin, 100 KB body cap, request-id correlation.
+- Booking authorization is server-side only: slot eligibility is recomputed on every write, a
+  booking is visible solely to its participants (non-participants get 404, never 403), and
+  `role=hr` listings are refused to non-HR accounts.
 - **Not yet implemented:** CSRF token (SameSite=Lax mitigates for most browsers), refresh-token
   reuse detection (tokens are revoked but no alerting on reuse), dedicated verify/reset JWT
   secrets, `requireRole` usage, Redis-backed rate limiting (in-memory store), audit logging.

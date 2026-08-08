@@ -151,7 +151,10 @@ describe('Public listing', () => {
   it('only lists published profiles', async () => {
     const published = await createUser(USER_ROLES.HR, `${prefix}-pub@example.com`)
     const draft = await createUser(USER_ROLES.HR, `${prefix}-draft@example.com`)
-    await request(app).put('/api/v1/profiles/me').set(bearer(published.id, 'HR')).send(profilePayload)
+    await request(app)
+      .put('/api/v1/profiles/me')
+      .set(bearer(published.id, 'HR'))
+      .send(profilePayload)
     await request(app).put('/api/v1/profiles/me').set(bearer(draft.id, 'HR')).send(profilePayload)
 
     const publishRes = await request(app)
@@ -267,9 +270,7 @@ describe('Public listing', () => {
       .get('/api/v1/profiles')
       .query({ minRateCents: 4000, maxRateCents: 10000 })
 
-    const rates: number[] = res.body.data.map(
-      (p: { hourlyRateCents: number }) => p.hourlyRateCents,
-    )
+    const rates: number[] = res.body.data.map((p: { hourlyRateCents: number }) => p.hourlyRateCents)
     expect(rates.length).toBeGreaterThan(0)
     expect(rates.every((r) => r >= 4000 && r <= 10000)).toBe(true)
     expect(rates).toContain(9000)

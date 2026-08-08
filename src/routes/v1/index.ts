@@ -1,11 +1,15 @@
 import { Router } from 'express'
 import { authRouter } from './auth.routes.js'
+import { availabilityRouter } from './availability.routes.js'
+import { bookingRouter } from './booking.routes.js'
 import { hrProfileRouter } from './hrProfile.routes.js'
 
 export const apiV1Router: Router = Router()
 
 apiV1Router.use('/auth', authRouter)
 apiV1Router.use('/profiles', hrProfileRouter)
+apiV1Router.use('/availability', availabilityRouter)
+apiV1Router.use('/bookings', bookingRouter)
 
 apiV1Router.get('/', (_req, res) => {
   res.status(200).json({

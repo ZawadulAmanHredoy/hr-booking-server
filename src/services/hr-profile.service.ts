@@ -85,9 +85,7 @@ export interface ListProfilesResult {
   pagination: Pagination
 }
 
-export async function listPublicProfiles(
-  query: ListProfilesQuery,
-): Promise<ListProfilesResult> {
+export async function listPublicProfiles(query: ListProfilesQuery): Promise<ListProfilesResult> {
   const {
     page,
     limit,
@@ -189,9 +187,7 @@ export function toPublicProfile(
 
   return {
     id: profile.id,
-    user: user
-      ? { id: user.id, firstName: user.firstName, lastName: user.lastName }
-      : undefined,
+    user: user ? { id: user.id, firstName: user.firstName, lastName: user.lastName } : undefined,
     headline: profile.headline,
     bio: profile.bio,
     specializations: profile.specializations,

@@ -8,7 +8,7 @@ An HR consultation booking platform. Clients discover HR consultants, check thei
 availability, and book paid consultations over Google Meet or Zoom. Meeting links and receipts are
 delivered automatically by email.
 
-Current status: **Phase 2 (Authentication) is complete** on both client and server. See
+Current status: **Phase 4 (Availability & bookings) is complete** on both client and server. See
 [`PROGRESS.md`](./PROGRESS.md) for the phase roadmap.
 
 ## Repositories
@@ -16,24 +16,26 @@ Current status: **Phase 2 (Authentication) is complete** on both client and serv
 The workspace `D:\HR Booking` is **not** a git repo. It contains two independent repos that are
 deployed together:
 
-| Repo | Remote | Purpose |
-| --- | --- | --- |
+| Repo                   | Remote                                                   | Purpose                                  |
+| ---------------------- | -------------------------------------------------------- | ---------------------------------------- |
 | `D:\HR Booking\server` | `git@github.com:ZawadulAmanHredoy/hr-booking-server.git` | Node/Express API, DB, jobs, integrations |
-| `D:\HR Booking\client` | `git@github.com:ZawadulAmanHredoy/hr-booking-client.git` | React SPA |
+| `D:\HR Booking\client` | `git@github.com:ZawadulAmanHredoy/hr-booking-client.git` | React SPA                                |
 
 Both are public, `main` branch only, CI passing. Pushed via SSH (see constraints below).
 
 ## Tech stack (as implemented)
 
 ### Server
+
 - Node.js 22+, TypeScript 6 (strict), **ESM** (`"type": "module"`, NodeNext, `.js` import extensions)
 - Express 5, Mongoose 9 (MongoDB), ioredis 6 (Redis)
-- Zod 4 (env config + request validation), Pino + pino-http (structured logging)
+- Zod 4 (env config + request validation), Pino + pino-http (structured logging), Luxon (timezones)
 - @node-rs/argon2 (password hashing), jsonwebtoken (JWT), cookie-parser, nodemailer
 - express-rate-limit, helmet, compression, cors
 - Vitest 4 + Supertest (integration tests)
 
 ### Client
+
 - React 19, TypeScript 6 (strict), Vite 8
 - React Router 7 (data router), TanStack Query 5, Zustand 5, Axios
 - Tailwind CSS 4 (CSS-first `@theme`) + shadcn-style UI primitives
@@ -75,7 +77,8 @@ Both are public, `main` branch only, CI passing. Pushed via SSH (see constraints
 - Base: `/api/v1`. Success: `{ "success": true, "data": ... }`. Error:
   `{ "success": false, "error": { "code", "message", "details? } }`.
 - Error codes: `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`,
-  `VALIDATION_ERROR`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`, `INTERNAL_SERVER_ERROR`.
+  `SLOT_ALREADY_BOOKED`, `VALIDATION_ERROR`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`,
+  `INTERNAL_SERVER_ERROR`.
 - JSON body limit 100 KB. Every response carries `X-Request-Id`.
 - Auth uses **HTTP-only cookies** (`hrb_access_token`, `hrb_refresh_token`), not localStorage.
   `secure` only in production, `SameSite=Lax`.
@@ -97,6 +100,23 @@ Both are public, `main` branch only, CI passing. Pushed via SSH (see constraints
   `JWT_REFRESH_SECRET`; verify-email 24 h, reset-password 1 h.
 - RBAC roles: `USER`, `HR`, `ADMIN`, `SUPER_ADMIN`. `requireRole` middleware exists but no route
   uses it yet.
+
+## Scheduling design (implemented)
+
+- Every instant is stored and transported in **UTC**. Working hours are wall-clock strings
+  (`HH:mm`) interpreted in the consultant's IANA `timezone`; conversion runs through **Luxon**, so
+  DST transitions are handled by the zone database rather than by offset arithmetic.
+- Slot generation is a pure function (`slot.service.ts`) driven by slot duration, buffer, minimum
+  notice, booking horizon, blocked dates and existing bookings. The API only ever returns slots a
+  client may actually book, and every write re-checks the same rule server-side (`isOfferedSlot`).
+- Double booking is impossible by construction: an active booking carries
+  `slotKey = ${hrUserId}:${startAt}` under a **unique sparse index**, cancelling `$unset`s it, and a
+  post-insert overlap sweep resolves partial overlaps (the later `_id` withdraws). No multi-document
+  transactions — the dev MongoDB is standalone.
+- Booking statuses: `PENDING`, `CONFIRMED` (both hold a slot), `CANCELLED`, `COMPLETED`, `NO_SHOW`.
+  Bookings are created `CONFIRMED` today; payments (Phase 7) will introduce `PENDING`.
+- The consultation fee is the profile's hourly rate prorated to the slot length, snapshotted onto
+  the booking.
 
 ## Email
 

@@ -70,3 +70,70 @@ export const PROFILE_LIMITS = {
   HOURLY_RATE_CENTS_MIN: 500,
   HOURLY_RATE_CENTS_MAX: 10_000_00,
 } as const
+
+export const MEETING_PROVIDERS = {
+  GOOGLE_MEET: 'GOOGLE_MEET',
+  ZOOM: 'ZOOM',
+} as const
+
+export type MeetingProvider = (typeof MEETING_PROVIDERS)[keyof typeof MEETING_PROVIDERS]
+
+export const BOOKING_STATUS = {
+  PENDING: 'PENDING',
+  CONFIRMED: 'CONFIRMED',
+  CANCELLED: 'CANCELLED',
+  COMPLETED: 'COMPLETED',
+  NO_SHOW: 'NO_SHOW',
+} as const
+
+export type BookingStatus = (typeof BOOKING_STATUS)[keyof typeof BOOKING_STATUS]
+
+// Statuses that still occupy a slot. Only these carry a `slotKey`, which is what the
+// sparse unique index uses to make double booking impossible.
+export const ACTIVE_BOOKING_STATUSES: BookingStatus[] = [
+  BOOKING_STATUS.PENDING,
+  BOOKING_STATUS.CONFIRMED,
+]
+
+export const CANCELLED_BY = {
+  USER: 'USER',
+  HR: 'HR',
+  ADMIN: 'ADMIN',
+  SYSTEM: 'SYSTEM',
+} as const
+
+export type CancelledBy = (typeof CANCELLED_BY)[keyof typeof CANCELLED_BY]
+
+export const SLOT_DURATIONS = [15, 30, 45, 60, 90] as const
+
+export type SlotDuration = (typeof SLOT_DURATIONS)[number]
+
+export const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6] as const
+
+export const AVAILABILITY_DEFAULTS = {
+  TIMEZONE: 'UTC',
+  SLOT_DURATION_MINUTES: 30,
+  BUFFER_MINUTES: 0,
+  MIN_NOTICE_MINUTES: 120,
+  MAX_ADVANCE_DAYS: 60,
+} as const
+
+export const AVAILABILITY_LIMITS = {
+  INTERVALS_PER_DAY_MAX: 4,
+  BLOCKED_DATES_MAX: 90,
+  BUFFER_MINUTES_MAX: 60,
+  MIN_NOTICE_MINUTES_MAX: 14 * 24 * 60,
+  MAX_ADVANCE_DAYS_MIN: 1,
+  MAX_ADVANCE_DAYS_MAX: 180,
+  SLOT_RANGE_DAYS_MAX: 31,
+  BLOCK_REASON_MAX: 120,
+} as const
+
+export const BOOKING_LIMITS = {
+  NOTES_MAX: 1000,
+  CANCEL_REASON_MAX: 300,
+  CANCEL_NOTICE_MINUTES: 60,
+  RESCHEDULE_MAX: 3,
+  PAGE_SIZE_MAX: 50,
+  PAGE_SIZE_DEFAULT: 10,
+} as const

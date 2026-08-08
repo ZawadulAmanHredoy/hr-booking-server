@@ -8,11 +8,7 @@ import {
   upsertProfileHandler,
 } from '../../controllers/hr-profile.controller.js'
 import { authenticate, loadUser, requireRole } from '../../middlewares/auth.js'
-import {
-  validateBody,
-  validateParams,
-  validateQuery,
-} from '../../middlewares/validate.js'
+import { validateBody, validateParams, validateQuery } from '../../middlewares/validate.js'
 import {
   availabilitySchema,
   listProfilesQuerySchema,
@@ -25,7 +21,13 @@ import { USER_ROLES } from '../../config/constants.js'
 export const hrProfileRouter: Router = Router()
 
 // Authenticated — own profile. PUT /me doubles as onboarding for USER-role accounts.
-hrProfileRouter.put('/me', authenticate, loadUser, validateBody(upsertProfileSchema), upsertProfileHandler)
+hrProfileRouter.put(
+  '/me',
+  authenticate,
+  loadUser,
+  validateBody(upsertProfileSchema),
+  upsertProfileHandler,
+)
 
 // HR-only (must be registered before the public /:id catch-all)
 hrProfileRouter.get('/me', authenticate, loadUser, requireRole(USER_ROLES.HR), getMyProfileHandler)

@@ -43,6 +43,12 @@ export class ConflictError extends AppError {
   }
 }
 
+export class SlotUnavailableError extends AppError {
+  constructor(message = 'This appointment slot is no longer available.') {
+    super(409, 'SLOT_ALREADY_BOOKED', message)
+  }
+}
+
 export class ValidationError extends AppError {
   constructor(message = 'Invalid request.', details?: unknown) {
     super(400, 'VALIDATION_ERROR', message, details)
