@@ -1,5 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
-import { isTest } from '../config/env.js'
+import { isProduction, isTest } from '../config/env.js'
 import { AUTH_COOKIES } from '../config/constants.js'
 import { UnauthorizedError, ForbiddenError } from '../utils/http-errors.js'
 import { verifyAccessToken } from '../utils/tokens.js'
@@ -66,7 +66,7 @@ export function authRateLimiter(): RequestHandler {
   }
   return rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 10,
+    limit: isProduction ? 10 : 100,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: {
