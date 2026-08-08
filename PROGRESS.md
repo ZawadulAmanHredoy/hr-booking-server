@@ -188,7 +188,9 @@ Everything below is written from the actual code (not the original plan).
 - Tests: 13 pure slot-generation tests (timezones, DST, buffers, blocks, notice, horizon),
   14 availability API tests, 20 booking API tests including a **concurrent double-booking race**
 - `vitest.config.ts` now sets `fileParallelism: false` — the suites share one live MongoDB
-- **Verification:** lint ✅ typecheck ✅ **83/83 tests** ✅ build ✅
+- **Verification:** lint ✅ typecheck ✅ **83/83 tests** ✅ build ✅ format ✅
+- Repo: `62b0ed4` — _feat(bookings): availability, DST-safe slot generation, and race-proof
+  booking_
 
 ### Client
 
@@ -209,6 +211,8 @@ Everything below is written from the actual code (not the original plan).
 - **End-to-end smoke tested** through the Vite proxy (25 checks): register → verify → login →
   onboard → refresh for the new HR role → publish → set Dhaka availability → public slots →
   book → slot disappears → both parties list it → reschedule → cancel → slot returns
+- Repo: `0f4cdc1` — _feat(bookings): slot picker, booking flow, dashboard, and availability
+  editor_
 
 ---
 
