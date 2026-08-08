@@ -513,7 +513,7 @@ async function dispatchBookingCreated(booking: BookingDocument): Promise<void> {
   const meetingQueue = getMeetingQueue()
   await meetingQueue.add('create', { bookingId: booking.id as string })
 
-  scheduleReminder(booking.id as string, booking.startAt)
+  await scheduleReminder(booking.id as string, booking.startAt)
   await enqueueBookingEmails(booking, 'confirmation')
 }
 
@@ -524,7 +524,7 @@ async function dispatchBookingCancelled(
   const meetingQueue = getMeetingQueue()
   await meetingQueue.add('cancel', { bookingId: booking.id as string })
 
-  removeReminder(booking.id as string)
+  await removeReminder(booking.id as string)
   await enqueueBookingEmails(booking, 'cancellation', { cancelledBy })
 }
 
@@ -535,31 +535,42 @@ async function dispatchBookingRescheduled(
   const meetingQueue = getMeetingQueue()
   await meetingQueue.add('sync', { bookingId: booking.id as string })
 
-  removeReminder(booking.id as string)
-  scheduleReminder(booking.id as string, booking.startAt)
+  await removeReminder(booking.id as string)
+  await scheduleReminder(booking.id as string, booking.startAt)
   await enqueueBookingEmails(booking, 'reschedule', { previousStartAt })
 }
 
-function scheduleReminder(bookingId: string, startAt: Date): void {
+async function scheduleReminder(bookingId: string, startAt: Date): Promise<void> {
   const delay = startAt.getTime() - REMINDER_LEAD_MS - Date.now()
   if (delay <= 0) return
 
-  getReminderQueue()
-    .add('remind', { bookingId }, { jobId: reminderJobId(bookingId), delay })
-    .catch((err) => {
-      logger.warn(
-        { bookingId, err: err instanceof Error ? err.message : err },
-        'Failed to schedule reminder',
-      )
-    })
+  try {
+    await getReminderQueue().add(
+      'remind',
+      { bookingId },
+      {
+        jobId: reminderJobId(bookingId),
+        delay,
+      },
+    )
+  } catch (err) {
+    logger.error(
+      { bookingId, err: err instanceof Error ? err.message : err },
+      'Failed to schedule reminder',
+    )
+    throw err
+  }
 }
 
-function removeReminder(bookingId: string): void {
-  getReminderQueue()
-    .remove(reminderJobId(bookingId))
-    .catch(() => {
-      /* Best effort — the job may have already fired or never existed. */
-    })
+async function removeReminder(bookingId: string): Promise<void> {
+  try {
+    await getReminderQueue().remove(reminderJobId(bookingId))
+  } catch (err) {
+    logger.debug(
+      { bookingId, err: err instanceof Error ? err.message : err },
+      'Reminder removal skipped',
+    )
+  }
 }
 
 type EmailKind = 'confirmation' | 'cancellation' | 'reschedule'
