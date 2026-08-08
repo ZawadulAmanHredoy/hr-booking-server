@@ -140,6 +140,5 @@ const hrProfileSchema = new Schema<HRProfileDocument>(
 hrProfileSchema.index({ specializations: 1 })
 hrProfileSchema.index({ status: 1, rating: -1 })
 hrProfileSchema.index({ status: 1, hourlyRateCents: 1 })
-hrProfileSchema.index({ userId: 1 }, { unique: true })
 
 export const HRProfile = mongoose.model<HRProfileDocument>('HRProfile', hrProfileSchema)
