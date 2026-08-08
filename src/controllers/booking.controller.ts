@@ -5,7 +5,9 @@ import {
   getBookingForActor,
   listBookings,
   rescheduleBooking,
-  toBookingResponse,
+  retryBookingMeeting,
+  toBookingDetail,
+  toBookingList,
   type Actor,
 } from '../services/booking.service.js'
 import { sendPaginated, sendSuccess } from '../utils/response.js'
@@ -19,12 +21,9 @@ export async function createBookingHandler(
 ): Promise<void> {
   try {
     const actor = requireActor(req)
-    const booking = await createBooking(actor, req.body)
-    sendSuccess(
-      res,
-      { booking: toBookingResponse(await getBookingForActor(actor, booking.id)) },
-      201,
-    )
+    const created = await createBooking(actor, req.body)
+    const booking = await getBookingForActor(actor, created.id)
+    sendSuccess(res, { booking: await toBookingDetail(booking) }, 201)
   } catch (err) {
     next(err)
   }
@@ -41,7 +40,7 @@ export async function listBookingsHandler(
       actor,
       req.query as unknown as ListBookingsQuery,
     )
-    sendPaginated(res, data.map(toBookingResponse), pagination)
+    sendPaginated(res, await toBookingList(data), pagination)
   } catch (err) {
     next(err)
   }
@@ -55,7 +54,7 @@ export async function getBookingHandler(
   try {
     const actor = requireActor(req)
     const booking = await getBookingForActor(actor, String(req.params.id))
-    sendSuccess(res, { booking: toBookingResponse(booking) })
+    sendSuccess(res, { booking: await toBookingDetail(booking) })
   } catch (err) {
     next(err)
   }
@@ -69,7 +68,7 @@ export async function cancelBookingHandler(
   try {
     const actor = requireActor(req)
     const booking = await cancelBooking(actor, String(req.params.id), req.body.reason)
-    sendSuccess(res, { booking: toBookingResponse(booking) })
+    sendSuccess(res, { booking: await toBookingDetail(booking) })
   } catch (err) {
     next(err)
   }
@@ -83,7 +82,21 @@ export async function rescheduleBookingHandler(
   try {
     const actor = requireActor(req)
     const booking = await rescheduleBooking(actor, String(req.params.id), req.body)
-    sendSuccess(res, { booking: toBookingResponse(booking) })
+    sendSuccess(res, { booking: await toBookingDetail(booking) })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function retryMeetingHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const actor = requireActor(req)
+    const booking = await retryBookingMeeting(actor, String(req.params.id))
+    sendSuccess(res, { booking: await toBookingDetail(booking) })
   } catch (err) {
     next(err)
   }

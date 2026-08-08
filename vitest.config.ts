@@ -8,5 +8,12 @@ export default defineConfig({
     clearMocks: true,
     // Integration suites share one live MongoDB, so files run one at a time.
     fileParallelism: false,
+    // Makes the Google integration "configured" so its code paths are reachable. No test hits
+    // the network: suites without a seeded OAuth account fail before any request is made, and
+    // the meeting suite stubs global fetch.
+    env: {
+      GOOGLE_CLIENT_ID: 'test-google-client-id',
+      GOOGLE_CLIENT_SECRET: 'test-google-client-secret',
+    },
   },
 })

@@ -43,6 +43,12 @@ export class ConflictError extends AppError {
   }
 }
 
+export class IntegrationUnavailableError extends AppError {
+  constructor(message = 'This integration is unavailable right now.') {
+    super(503, 'INTEGRATION_UNAVAILABLE', message)
+  }
+}
+
 export class SlotUnavailableError extends AppError {
   constructor(message = 'This appointment slot is no longer available.') {
     super(409, 'SLOT_ALREADY_BOOKED', message)

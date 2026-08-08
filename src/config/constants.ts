@@ -24,6 +24,7 @@ export const TOKEN_TYPES = {
   REFRESH: 'refresh',
   VERIFY_EMAIL: 'verify-email',
   RESET_PASSWORD: 'reset-password',
+  OAUTH_STATE: 'oauth-state',
 } as const
 
 export type TokenType = (typeof TOKEN_TYPES)[keyof typeof TOKEN_TYPES]
@@ -77,6 +78,41 @@ export const MEETING_PROVIDERS = {
 } as const
 
 export type MeetingProvider = (typeof MEETING_PROVIDERS)[keyof typeof MEETING_PROVIDERS]
+
+/**
+ * Providers with a working adapter today. `MEETING_PROVIDERS` keeps the wider set so stored
+ * bookings stay readable if another provider is added (or removed) later.
+ */
+export const SUPPORTED_MEETING_PROVIDERS = [MEETING_PROVIDERS.GOOGLE_MEET] as const
+
+export type SupportedMeetingProvider = (typeof SUPPORTED_MEETING_PROVIDERS)[number]
+
+export const MEETING_STATUS = {
+  PENDING: 'PENDING',
+  CREATED: 'CREATED',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+} as const
+
+export type MeetingStatus = (typeof MEETING_STATUS)[keyof typeof MEETING_STATUS]
+
+export const OAUTH_PROVIDERS = {
+  GOOGLE: 'GOOGLE',
+} as const
+
+export type OAuthProvider = (typeof OAUTH_PROVIDERS)[keyof typeof OAUTH_PROVIDERS]
+
+export const GOOGLE_OAUTH = {
+  AUTH_URL: 'https://accounts.google.com/o/oauth2/v2/auth',
+  TOKEN_URL: 'https://oauth2.googleapis.com/token',
+  REVOKE_URL: 'https://oauth2.googleapis.com/revoke',
+  CALENDAR_API: 'https://www.googleapis.com/calendar/v3',
+  USERINFO_URL: 'https://www.googleapis.com/oauth2/v3/userinfo',
+  SCOPES: ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events'],
+  /** Refresh a little early so a request never races the expiry. */
+  TOKEN_EXPIRY_SKEW_MS: 60_000,
+  STATE_TTL: '10m',
+} as const
 
 export const BOOKING_STATUS = {
   PENDING: 'PENDING',

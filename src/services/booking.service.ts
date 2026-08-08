@@ -16,6 +16,16 @@ import type { UserDocument } from '../models/User.js'
 import type { AvailabilityDocument } from '../models/Availability.js'
 import { getAvailabilityForHr } from './availability.service.js'
 import { isOfferedSlot } from './slot.service.js'
+import {
+  cancelMeetingForBooking,
+  ensureMeetingForBooking,
+  getMeetingForBooking,
+  getMeetingsForBookings,
+  isRetryable,
+  syncMeetingTimes,
+  toMeetingResponse,
+} from './meeting.service.js'
+import type { MeetingDocument } from '../models/Meeting.js'
 import { addMinutes } from '../utils/datetime.js'
 import {
   BadRequestError,
@@ -92,6 +102,10 @@ export async function createBooking(
     { bookingId: booking.id, userId: actor.id, hrUserId, startAt: startAt.toISOString() },
     'Booking created',
   )
+
+  // The conference is best-effort: `ensureMeetingForBooking` records provider failures on the
+  // meeting instead of throwing, so a Google outage never costs the client their slot.
+  await ensureMeetingForBooking(booking.id)
 
   return booking
 }
@@ -189,6 +203,8 @@ export async function cancelBooking(
 
   logger.info({ bookingId: booking.id, cancelledBy: role }, 'Booking cancelled')
 
+  await cancelMeetingForBooking(booking.id)
+
   return getBookingForActor(actor, booking.id)
 }
 
@@ -262,10 +278,48 @@ export async function rescheduleBooking(
     'Booking rescheduled',
   )
 
+  await syncMeetingTimes(moved.id)
+
   return getBookingForActor(actor, moved.id)
 }
 
-export function toBookingResponse(booking: BookingDocument): Record<string, unknown> {
+/** Participant-triggered repair for a conference the provider refused to create earlier. */
+export async function retryBookingMeeting(
+  actor: Actor,
+  bookingId: string,
+): Promise<BookingDocument> {
+  const booking = await Booking.findById(bookingId)
+  if (!booking) {
+    throw new NotFoundError('Booking not found.')
+  }
+  assertParticipant(actor, booking)
+
+  const meeting = await getMeetingForBooking(booking.id)
+  if (!isRetryable(meeting, booking)) {
+    throw new ConflictError('This meeting does not need to be created again.')
+  }
+
+  await ensureMeetingForBooking(booking.id)
+
+  return getBookingForActor(actor, booking.id)
+}
+
+/** Booking DTO with its conference attached — the shape every booking endpoint returns. */
+export async function toBookingDetail(booking: BookingDocument): Promise<Record<string, unknown>> {
+  return toBookingResponse(booking, await getMeetingForBooking(booking.id))
+}
+
+export async function toBookingList(
+  bookings: BookingDocument[],
+): Promise<Record<string, unknown>[]> {
+  const meetings = await getMeetingsForBookings(bookings.map((booking) => booking._id as never))
+  return bookings.map((booking) => toBookingResponse(booking, meetings.get(booking.id) ?? null))
+}
+
+export function toBookingResponse(
+  booking: BookingDocument,
+  meeting: MeetingDocument | null = null,
+): Record<string, unknown> {
   const client = asPopulatedUser(booking.userId)
   const consultant = asPopulatedUser(booking.hrUserId)
   const profile = booking.hrProfileId as unknown as { id?: string; headline?: string } | null
@@ -294,6 +348,8 @@ export function toBookingResponse(booking: BookingDocument): Record<string, unkn
       ? { id: consultant.id, firstName: consultant.firstName, lastName: consultant.lastName }
       : undefined,
     profile: profile && profile.id ? { id: profile.id, headline: profile.headline } : undefined,
+    meeting: toMeetingResponse(meeting, booking.meetingProvider),
+    canRetryMeeting: isRetryable(meeting, booking),
     createdAt: booking.createdAt,
     updatedAt: booking.updatedAt,
   }

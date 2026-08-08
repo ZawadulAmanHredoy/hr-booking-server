@@ -1,5 +1,10 @@
 import { z } from 'zod'
-import { BOOKING_LIMITS, BOOKING_STATUS, MEETING_PROVIDERS } from '../config/constants.js'
+import {
+  BOOKING_LIMITS,
+  BOOKING_STATUS,
+  MEETING_PROVIDERS,
+  SUPPORTED_MEETING_PROVIDERS,
+} from '../config/constants.js'
 import { isValidTimezone } from '../utils/datetime.js'
 
 const objectIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid id')
@@ -21,9 +26,8 @@ export const createBookingSchema = z.object({
   startAt: startAtSchema,
   timezone: timezoneSchema.optional(),
   notes: z.string().trim().max(BOOKING_LIMITS.NOTES_MAX).optional(),
-  meetingProvider: z
-    .enum([MEETING_PROVIDERS.GOOGLE_MEET, MEETING_PROVIDERS.ZOOM])
-    .default(MEETING_PROVIDERS.GOOGLE_MEET),
+  // Only providers with a live adapter are bookable; the model enum stays wider on purpose.
+  meetingProvider: z.enum(SUPPORTED_MEETING_PROVIDERS).default(MEETING_PROVIDERS.GOOGLE_MEET),
 })
 
 export const cancelBookingSchema = z.object({

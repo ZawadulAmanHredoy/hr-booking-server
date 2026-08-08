@@ -1,6 +1,6 @@
 # Architecture — HR Booking
 
-> Code-level architecture written from the actual implementation (Phases 1–4).
+> Code-level architecture written from the actual implementation (Phases 1–5).
 > Last updated: 2026-08-08.
 
 ## 1. System overview
@@ -14,9 +14,10 @@
            │                             │
            │                  ┌──────────┴──────────────────────────────────┐
            │                  │ MongoDB (users, tokens, profiles,           │
-           │                  │          availability, bookings)            │
+           │                  │   availability, bookings, meetings, oauth)  │
            │                  │ Redis (future queues)                       │
            │                  │ SMTP (Mailpit dev)                          │
+           │                  │ Google OAuth + Calendar API (Meet links)    │
            └──────────────────┴─────────────────────────────────────────────┘
 ```
 
@@ -152,6 +153,30 @@ An empty `weeklyHours` means nothing is bookable; the record is created empty on
 Indexes: **unique sparse** `slotKey`, `userId+startAt`, `hrUserId+startAt`,
 `hrUserId+status+startAt`, `status+startAt`.
 
+**OAuthAccount**
+
+| field                              | notes                                                         |
+| ---------------------------------- | ------------------------------------------------------------- |
+| userId + provider                  | unique together — reconnecting overwrites                     |
+| providerAccountId / accountEmail   | who the consultant authorised as                              |
+| refreshToken                       | **AES-256-GCM ciphertext**, `select: false`                   |
+| accessToken / accessTokenExpiresAt | short-lived, also encrypted, refreshed on demand              |
+| scopes / calendarId                | granted scopes; target calendar (default `primary`)           |
+| lastError                          | set when Google refuses the credentials → prompt to reconnect |
+
+**Meeting**
+
+| field                                  | notes                                                   |
+| -------------------------------------- | ------------------------------------------------------- |
+| bookingId                              | ref Booking, unique — one conference per booking        |
+| provider / status                      | `GOOGLE_MEET`; `PENDING`/`CREATED`/`FAILED`/`CANCELLED` |
+| externalMeetingId / externalCalendarId | Google Calendar event and calendar                      |
+| meetingUrl                             | the Meet join link                                      |
+| startTime / endTime                    | mirrored from the booking                               |
+| lastError / attempts                   | why the last attempt failed, and how many there were    |
+
+Index: `status+startTime`.
+
 ### 2.5 Auth flow (`src/services/auth.service.ts` + middleware)
 
 Tokens:
@@ -270,7 +295,79 @@ Routes:
 | `PATCH /api/v1/bookings/:id/cancel`         | participant            | optional `reason`                                                         |
 | `PATCH /api/v1/bookings/:id/reschedule`     | participant            | new `startAt`                                                             |
 
-### 2.8 Email (`src/services/email/`)
+### 2.8 Meeting integration (Google Meet)
+
+**Scope:** Google Meet only. Zoom was descoped by the project owner; the abstraction below is
+what keeps that a cheap decision to revisit.
+
+```
+Booking service
+      ↓
+Meeting service            (owns the Meeting document + failure policy)
+      ↓
+MeetingProviderAdapter     (createMeeting / updateMeeting / cancelMeeting)
+      ↓
+googleMeetProvider
+      ↓
+oauth.service (tokens) ─── google-calendar.client (REST)
+```
+
+`SUPPORTED_MEETING_PROVIDERS` gates what the API accepts, while `MEETING_PROVIDERS` keeps `ZOOM`
+so stored documents and the schema survive the decision either way.
+
+**No SDK.** The integration is four REST calls (token exchange, token refresh, userinfo, calendar
+events) made with the built-in `fetch` — a deliberate trade against pulling in the very large
+`googleapis` package. Both clients live in `src/integrations/google/`.
+
+**Connect flow**
+
+```
+HR clicks Connect
+   → GET /integrations/google/connect        (HR-only, returns a URL — not a redirect,
+                                              because the browser must navigate itself)
+   → accounts.google.com consent             (state = 10-min signed JWT holding the user id)
+   → GET /integrations/google/callback       (PUBLIC: identity comes from `state`, not a cookie)
+   → exchange code, read identity, encrypt + upsert OAuthAccount
+   → 302 to ${CLIENT_URL}/profile/integrations?status=connected
+```
+
+Failures redirect with `?status=error&reason=…` (`invalid_state`, `access_denied`,
+`missing_refresh_token`, `missing_parameters`, `google_error`) so the SPA can explain itself.
+
+**Token handling.** `getGoogleAccess(userId)` returns a usable access token, refreshing it 60 s
+before expiry and re-encrypting it. A refresh rejection writes `lastError` on the account, which
+the UI turns into a "reconnect" prompt.
+
+**Meeting lifecycle**
+
+| Booking event | Meeting service           | Google call                                                                                                        |
+| ------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| created       | `ensureMeetingForBooking` | `events.insert` with `conferenceData.createRequest` (`hangoutsMeet`), `conferenceDataVersion=1`, `sendUpdates=all` |
+| rescheduled   | `syncMeetingTimes`        | `events.patch` with the new times                                                                                  |
+| cancelled     | `cancelMeetingForBooking` | `events.delete` (404/410 count as success)                                                                         |
+| retried       | `ensureMeetingForBooking` | same insert; `requestId` is `booking-<id>`, so no duplicate conference                                             |
+
+**Failure policy — the important part.** Meeting errors are _recorded, never thrown_. A booking
+made while Google is unreachable, or before the consultant connects a calendar, is still
+`CONFIRMED`; its meeting is `FAILED` with `lastError`, and the response carries
+`canRetryMeeting: true` so either participant can call
+`POST /api/v1/bookings/:id/meeting/retry`. Cancellation likewise proceeds even if the calendar
+delete fails.
+
+Creation currently runs **inline** in the booking request — safe, but it puts a Google round-trip
+on the response. Phase 6 moves it to a BullMQ queue.
+
+Routes:
+
+| Route                                      | Auth        | Notes                                                                                                     |
+| ------------------------------------------ | ----------- | --------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/integrations`                 | `HR`        | connection status; never includes tokens                                                                  |
+| `GET /api/v1/integrations/google/connect`  | `HR`        | `{ url }` for the consent screen; 503 `INTEGRATION_UNAVAILABLE` when the server has no client credentials |
+| `GET /api/v1/integrations/google/callback` | public      | always redirects back into the SPA                                                                        |
+| `DELETE /api/v1/integrations/google`       | `HR`        | best-effort revoke, then forget locally                                                                   |
+| `POST /api/v1/bookings/:id/meeting/retry`  | participant | 409 when the meeting does not need creating                                                               |
+
+### 2.9 Email (`src/services/email/`)
 
 - `email.service.ts` — `EmailMessage { to, subject, html, text? }`, `EmailTransport` interface.
 - `index.ts` — lazy singleton transport (`console` default, `smtp` if `EMAIL_TRANSPORT=smtp`);
@@ -280,18 +377,18 @@ Routes:
 - `templates/auth.templates.ts` — verify/reset HTML with `escapeHtml` on the recipient name; links
   point at `${CLIENT_URL}/verify-email?token=…` and `/reset-password?token=…`.
 
-### 2.9 Rate limiting
+### 2.10 Rate limiting
 
 - `apiRateLimiter()`: global, 120 req / 60 s, applied app-wide in `createApp`.
 - `authRateLimiter()`: 10 req / 15 min, applied to the whole `/api/v1/auth` router.
 - Both return a no-op middleware when `NODE_ENV=test` so the test suite isn't throttled.
 
-### 2.10 Seed (`src/scripts/seed.ts`)
+### 2.11 Seed (`src/scripts/seed.ts`)
 
 `npm run seed` → connect DB → if `SUPER_ADMIN_EMAIL`/`SUPER_ADMIN_PASSWORD` set and no such user,
 create a verified `SUPER_ADMIN` (argon2-hashed). Otherwise logs and exits.
 
-### 2.11 Tests (`tests/`)
+### 2.12 Tests (`tests/`)
 
 Vitest + Supertest — 83 tests across six files:
 

@@ -8,8 +8,11 @@ An HR consultation booking platform. Clients discover HR consultants, check thei
 availability, and book paid consultations over Google Meet or Zoom. Meeting links and receipts are
 delivered automatically by email.
 
-Current status: **Phase 4 (Availability & bookings) is complete** on both client and server. See
+Current status: **Phase 5 (Meeting integration) is complete** on both client and server. See
 [`PROGRESS.md`](./PROGRESS.md) for the phase roadmap.
+
+**Scope decision:** the platform integrates **Google Meet only**. Zoom was descoped by the project
+owner; the `MeetingProvider` abstraction remains so it can be added as one more adapter.
 
 ## Repositories
 
@@ -78,7 +81,7 @@ Both are public, `main` branch only, CI passing. Pushed via SSH (see constraints
   `{ "success": false, "error": { "code", "message", "details? } }`.
 - Error codes: `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`,
   `SLOT_ALREADY_BOOKED`, `VALIDATION_ERROR`, `PAYLOAD_TOO_LARGE`, `RATE_LIMITED`,
-  `INTERNAL_SERVER_ERROR`.
+  `INTEGRATION_UNAVAILABLE`, `INTERNAL_SERVER_ERROR`.
 - JSON body limit 100 KB. Every response carries `X-Request-Id`.
 - Auth uses **HTTP-only cookies** (`hrb_access_token`, `hrb_refresh_token`), not localStorage.
   `secure` only in production, `SameSite=Lax`.
@@ -117,6 +120,26 @@ Both are public, `main` branch only, CI passing. Pushed via SSH (see constraints
   Bookings are created `CONFIRMED` today; payments (Phase 7) will introduce `PENDING`.
 - The consultation fee is the profile's hourly rate prorated to the slot length, snapshotted onto
   the booking.
+
+## Meeting integration (implemented)
+
+- **Google Meet only.** Google OAuth 2.0 (authorization code, `access_type=offline`,
+  `prompt=consent`) with the `calendar.events` scope. No SDK — four REST calls made with the
+  built-in `fetch`, wrapped in `integrations/google/`.
+- The consultant's refresh and access tokens live in `OAuthAccount`, **AES-256-GCM encrypted**
+  (`OAUTH_ENCRYPTION_KEY`, scrypt-derived) and `select: false`. They are never returned by any
+  endpoint.
+- The OAuth `state` is a 10-minute signed JWT carrying the user id: it is both the CSRF defence
+  and the identity source, so the public callback never depends on a cookie.
+- `MeetingProviderAdapter` (`createMeeting`/`updateMeeting`/`cancelMeeting`) sits between the
+  booking flow and any vendor. `googleMeetProvider` is the only registered adapter.
+- Booking → Calendar event with `conferenceData.createRequest` (`hangoutsMeet`) and both
+  attendees, `sendUpdates=all` so Google sends the invitations. The conference `requestId` is
+  `booking-<id>`, which makes retries idempotent.
+- **Provider failures are recoverable, never fatal**: they are written to the `Meeting` document
+  (`FAILED` + `lastError`) while the booking stays `CONFIRMED`, and either participant can call
+  `POST /bookings/:id/meeting/retry`.
+- Reschedule PATCHes the event; cancellation deletes it (404/410 treated as success).
 
 ## Email
 

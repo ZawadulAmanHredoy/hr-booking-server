@@ -10,8 +10,8 @@
 | **2 — Authentication**          | Register/login, email verify, password reset, refresh rotation, RBAC | ✅ Done     |
 | **3 — HR profiles**             | HR role + profile management, public consultant listings             | ✅ Done     |
 | **4 — Availability & bookings** | Working hours, slot generation, booking lifecycle, timezones         | ✅ Done     |
-| 5 — Meeting integration         | Google OAuth + Calendar/Meet, Zoom OAuth, provider abstraction       | ⏳ Next     |
-| 6 — Email & background jobs     | Redis, BullMQ, confirmation mail, 30-min reminders                   | Not started |
+| **5 — Meeting integration**     | Google OAuth + Calendar/Meet, provider abstraction (Zoom descoped)   | ✅ Done     |
+| 6 — Email & background jobs     | Redis, BullMQ, confirmation mail, 30-min reminders                   | ⏳ Next     |
 | 7 — Payments                    | Checkout, webhooks, receipts, refunds                                | Not started |
 | 8 — Notifications               | Notification model, Socket.IO, notification centre                   | Not started |
 | 9 — Reviews                     | Ratings, review validation, duplicate protection                     | Not started |
@@ -216,12 +216,76 @@ Everything below is written from the actual code (not the original plan).
 
 ---
 
+## Phase 5 — Meeting integration ✅
+
+> **Scope decision:** Zoom was descoped at the user's request — Google Meet only. The provider
+> abstraction is still in place, so adding Zoom later is a new adapter plus a registry entry, not
+> a rewrite.
+
+### Server
+
+- No new dependency: the Google OAuth and Calendar calls are ~4 REST endpoints hit with the
+  built-in `fetch`, behind clients in `integrations/google/`. This avoided pulling in the very
+  large `googleapis` package for a small, well-understood surface.
+- `OAuthAccount` model: one row per user+provider (unique compound index), `refreshToken` and
+  `accessToken` stored **AES-256-GCM encrypted** and `select: false`, plus scopes, calendar id and
+  a `lastError` used to prompt a reconnect
+- `utils/crypto.ts`: `encryptSecret`/`decryptSecret`, key derived with scrypt from
+  `OAUTH_ENCRYPTION_KEY`; output is `base64(iv | authTag | ciphertext)`
+- `Meeting` model: one per booking (unique `bookingId`), provider, status
+  (PENDING/CREATED/FAILED/CANCELLED), external event + calendar ids, join URL, `lastError`,
+  `attempts`
+- `oauth.service.ts`: consent URL with a **signed short-lived `state`** (10 min, doubles as the
+  CSRF defence and carries the user id, so the callback never trusts a cookie), code exchange,
+  identity lookup, upsert, disconnect with best-effort revoke, and `getGoogleAccess` which
+  refreshes the access token 60 s before expiry
+- `integrations/meeting/`: `MeetingProviderAdapter` interface (`createMeeting`/`updateMeeting`/
+  `cancelMeeting`), `googleMeetProvider`, and a registry keyed by provider
+- `meeting.service.ts`: creates the Calendar event with `conferenceData.createRequest`
+  (`hangoutsMeet`) and both attendees, `sendUpdates=all` so Google mails the invite. The
+  conference `requestId` is `booking-<id>`, so a retry reuses the conference instead of making a
+  second one
+- **External failures never cost a booking**: meeting errors are recorded on the meeting document
+  rather than thrown. A booking made while Google is down (or before the consultant connects) is
+  still `CONFIRMED`, with a `FAILED` meeting and `canRetryMeeting: true`
+- Lifecycle wiring: create → `ensureMeetingForBooking`, reschedule → `syncMeetingTimes` (PATCHes
+  the event), cancel → `cancelMeetingForBooking` (deletes the event, tolerating 404/410)
+- New endpoints: `GET /api/v1/integrations`, `GET /integrations/google/connect`,
+  `GET /integrations/google/callback` (public — Google redirects the browser here),
+  `DELETE /integrations/google`, and `POST /api/v1/bookings/:id/meeting/retry`
+- Booking responses now carry `meeting` and `canRetryMeeting`
+- Only providers with a live adapter are bookable (`SUPPORTED_MEETING_PROVIDERS`); the model enum
+  keeps `ZOOM` so the schema does not have to change when it is added
+- New error `IntegrationUnavailableError` → 503 `INTEGRATION_UNAVAILABLE`
+- Tests: 6 crypto, 12 integrations (RBAC, consent URL, callback failure modes, disconnect),
+  12 meeting (conference payload, token refresh, no-connection and outage paths, retry,
+  reschedule PATCH, cancel DELETE, list projection) — **113 total**
+- **Verification:** lint ✅ typecheck ✅ **113/113 tests** ✅ build ✅ format ✅
+
+### Client
+
+- `services/api/integrations.ts` + `retryMeeting` on the bookings service
+- `/profile/integrations` (HR only): connect / reconnect / disconnect, reads the callback's
+  `?status`/`?reason`, explains the reconnect case, and states plainly that the app never sees a
+  Google password
+- Booking detail: a **Join meeting** button when the link exists, otherwise an explanation and a
+  "Create link now" button when retryable; booking cards get a compact Join button
+- Dashboard: consultants without a connected calendar get a nudge banner and an Integrations tile
+- The booking form no longer offers Zoom
+- **Verification:** typecheck ✅ lint ✅ build ✅ format ✅
+- **End-to-end smoke tested** through the Vite proxy (27 checks): integration status and RBAC,
+  503 when the server has no Google credentials, callback redirects for bad state and declined
+  consent, booking succeeding with a `FAILED` meeting and a working retry, and cancel propagating
+  to the meeting
+
+---
+
 ## Verification status
 
-| Repo   | Lint | Typecheck | Tests                                                                               | Build | CI  |
-| ------ | ---- | --------- | ----------------------------------------------------------------------------------- | ----- | --- |
-| server | ✅   | ✅        | ✅ 83 (4 health + 16 auth + 16 profiles + 13 slots + 14 availability + 20 bookings) | ✅    | ✅  |
-| client | ✅   | ✅        | n/a (no tests yet)                                                                  | ✅    | ✅  |
+| Repo   | Lint | Typecheck | Tests                                                                                                                          | Build | CI  |
+| ------ | ---- | --------- | ------------------------------------------------------------------------------------------------------------------------------ | ----- | --- |
+| server | ✅   | ✅        | ✅ 113 (4 health + 16 auth + 16 profiles + 13 slots + 14 availability + 20 bookings + 6 crypto + 12 integrations + 12 meeting) | ✅    | ✅  |
+| client | ✅   | ✅        | n/a (no tests yet)                                                                                                             | ✅    | ✅  |
 
 Both repos pushed to `main`. Tests require live MongoDB (27017) + Redis (6379); they degrade
 gracefully with a warning if unavailable.
@@ -237,8 +301,20 @@ gracefully with a warning if unavailable.
 - Bookings are created straight to `CONFIRMED`; `PENDING` exists for the future payment flow and
   nothing writes it yet. Nothing moves a booking to `COMPLETED`/`NO_SHOW` either — that needs the
   background jobs of Phase 6.
-- `Meeting` is not modelled yet; `Booking.meetingProvider` records the client's choice and the
-  detail page says the joining link arrives once meeting integration ships (Phase 5).
+- Meeting creation happens **inline** in the booking request. It is wrapped so it can never fail
+  the booking, but it does add the Google round-trip to the response time. Moving it onto the
+  BullMQ queue is Phase 6 work, and `POST /bookings/:id/meeting/retry` is the manual stand-in
+  until then.
+- The Google **happy path is covered by tests against a mocked `fetch`**, not against live
+  Google — a real end-to-end check needs OAuth credentials and a browser consent screen, which
+  is a manual step (see the README).
+- Google notifies attendees itself (`sendUpdates=all`). The platform's own confirmation and
+  reminder emails are Phase 6.
+- Zoom is deliberately absent: `MEETING_PROVIDERS` still lists it for schema stability, but
+  `SUPPORTED_MEETING_PROVIDERS` (and therefore the API and UI) offer Google Meet only.
+- `OAUTH_ENCRYPTION_KEY` has a dev default; production refuses to boot with a `dev-` prefix or a
+  key shorter than 32 characters. Rotating it makes existing stored refresh tokens unreadable —
+  consultants would have to reconnect.
 - Double booking is prevented without transactions (unique sparse `slotKey` + a post-insert overlap
   sweep) because the dev MongoDB runs standalone. If the deployment target is a replica set, the
   sweep could be replaced by a transaction.
@@ -271,13 +347,13 @@ gracefully with a warning if unavailable.
 
 ---
 
-## Next up — Phase 5 (meeting integration)
+## Next up — Phase 6 (email & background jobs)
 
 Candidate scope (not yet planned in detail):
 
-- Server: `OAuthAccount` model with encrypted tokens, Google OAuth + Calendar/Meet event creation,
-  Zoom OAuth + meeting creation, a `MeetingProvider` abstraction
-  (`createMeeting`/`updateMeeting`/`cancelMeeting`) with `GoogleMeetProvider` / `ZoomProvider`,
-  a `Meeting` model linked to `Booking`, and recovery when the provider call fails
-- Client: `/profile/integrations` connect/disconnect cards, meeting link on the booking detail
-  page, provider badge on booking cards
+- Server: BullMQ queues on the existing Redis connection (`emailQueue`, `reminderQueue`,
+  `meetingQueue`), booking confirmation / cancellation / reschedule emails, a **delayed** job for
+  the 30-minute reminder (surviving restarts, never `setInterval`), moving meeting creation off
+  the request path onto `meetingQueue` with retries, and a worker with its own graceful shutdown
+- Client: nothing strictly required, though surfacing "reminder scheduled" on the booking detail
+  page would make the behaviour visible

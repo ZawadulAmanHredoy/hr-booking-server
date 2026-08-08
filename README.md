@@ -16,6 +16,8 @@ Phases 1–4 are complete:
 - **Availability & bookings** — per-consultant working hours in an IANA timezone, DST-correct slot
   generation, booking creation with race-proof double-booking protection, cancellation and
   rescheduling
+- **Meeting integration** — Google OAuth with encrypted token storage, automatic Google Meet
+  links via Google Calendar, and a provider abstraction so other conferencing tools can be added
 
 ## Tech Stack
 
@@ -145,13 +147,43 @@ All routes are versioned under `/api/v1`.
 
 ### Bookings (`/bookings`)
 
-| Method | Path              | Auth          | Notes                                                             |
-| ------ | ----------------- | ------------- | ----------------------------------------------------------------- |
-| POST   | `/`               | authenticated | `{ profileId, startAt, timezone?, notes?, meetingProvider? }`     |
-| GET    | `/`               | authenticated | `role=user\|hr`, `scope=upcoming\|past\|all`, `status`, paginated |
-| GET    | `/:id`            | participant   | non-participants get 404                                          |
-| PATCH  | `/:id/cancel`     | participant   | optional `reason`; clients need 60 minutes' notice                |
-| PATCH  | `/:id/reschedule` | participant   | `{ startAt, timezone? }`, max 3 times                             |
+| Method | Path                 | Auth          | Notes                                                             |
+| ------ | -------------------- | ------------- | ----------------------------------------------------------------- |
+| POST   | `/`                  | authenticated | `{ profileId, startAt, timezone?, notes?, meetingProvider? }`     |
+| GET    | `/`                  | authenticated | `role=user\|hr`, `scope=upcoming\|past\|all`, `status`, paginated |
+| GET    | `/:id`               | participant   | non-participants get 404                                          |
+| PATCH  | `/:id/cancel`        | participant   | optional `reason`; clients need 60 minutes' notice                |
+| PATCH  | `/:id/reschedule`    | participant   | `{ startAt, timezone? }`, max 3 times                             |
+| POST   | `/:id/meeting/retry` | participant   | re-attempts the conference after a provider failure               |
+
+### Integrations (`/integrations`)
+
+| Method | Path               | Auth | Notes                                                     |
+| ------ | ------------------ | ---- | --------------------------------------------------------- |
+| GET    | `/`                | `HR` | Google connection status; never returns tokens            |
+| GET    | `/google/connect`  | `HR` | `{ url }` for the consent screen; 503 when unconfigured   |
+| GET    | `/google/callback` | —    | Google redirects here; always redirects back into the SPA |
+| DELETE | `/google`          | `HR` | revokes at Google (best effort) and forgets locally       |
+
+## Google Meet setup
+
+Google Meet links are created automatically once a consultant connects their calendar. Without
+credentials the platform still works — bookings are confirmed, they just carry no meeting link,
+and either participant can retry once a calendar is connected.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and **enable
+   the Google Calendar API**.
+2. Configure the OAuth consent screen (External is fine for testing; add yourself as a test user).
+3. Create an **OAuth client ID → Web application** and add the redirect URI:
+   `http://localhost:5000/api/v1/integrations/google/callback`
+4. Put the id/secret in `.env` as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, and set a strong
+   `OAUTH_ENCRYPTION_KEY` (it encrypts stored refresh tokens — changing it later forces every
+   consultant to reconnect).
+5. Restart the server, then visit `/profile/integrations` as an HR account and click **Connect
+   Google Calendar**.
+
+The scope requested is `calendar.events` only. The application never sees a Google password, and
+tokens are stored AES-256-GCM encrypted and never returned by any endpoint.
 
 ## API Response Format
 
@@ -177,7 +209,8 @@ Error:
 { "success": false, "error": { "code": "NOT_FOUND", "message": "Resource not found." } }
 ```
 
-Booking-specific code: `SLOT_ALREADY_BOOKED` (409) when a slot is taken or not offered.
+Domain-specific codes: `SLOT_ALREADY_BOOKED` (409) when a slot is taken or not offered, and
+`INTEGRATION_UNAVAILABLE` (503) when a third-party integration is not configured or reachable.
 
 ## Scheduling model
 
@@ -194,9 +227,11 @@ Booking-specific code: `SLOT_ALREADY_BOOKED` (409) when a slot is taken or not o
 npm test
 ```
 
-83 tests: health, auth, HR profiles, pure slot generation (timezones and DST), availability, and
-bookings — including a concurrent double-booking race. API suites boot the Express app via
-Supertest and hit live MongoDB/Redis when available.
+113 tests: health, auth, HR profiles, pure slot generation (timezones and DST), availability,
+bookings (including a concurrent double-booking race), token encryption, Google integration
+endpoints, and the meeting lifecycle. API suites boot the Express app via Supertest and hit live
+MongoDB/Redis when available; Google is stubbed at the `fetch` boundary, so no test makes a
+network call.
 
 ## License
 

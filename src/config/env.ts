@@ -24,6 +24,13 @@ const envSchema = z
     SMTP_PASSWORD: z.string().optional(),
     EMAIL_FROM: z.string().default('no-reply@hrbooking.local'),
 
+    GOOGLE_CLIENT_ID: z.string().optional(),
+    GOOGLE_CLIENT_SECRET: z.string().optional(),
+    GOOGLE_REDIRECT_URI: z
+      .url()
+      .default('http://localhost:5000/api/v1/integrations/google/callback'),
+    OAUTH_ENCRYPTION_KEY: z.string().min(16).default('dev-oauth-encryption-key-change-me'),
+
     SUPER_ADMIN_EMAIL: z.string().optional(),
     SUPER_ADMIN_PASSWORD: z.string().optional(),
 
@@ -46,6 +53,13 @@ const envSchema = z
           path: ['JWT_REFRESH_SECRET'],
         })
       }
+      if (val.OAUTH_ENCRYPTION_KEY.startsWith('dev-') || val.OAUTH_ENCRYPTION_KEY.length < 32) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'OAUTH_ENCRYPTION_KEY must be a strong secret in production',
+          path: ['OAUTH_ENCRYPTION_KEY'],
+        })
+      }
     }
   })
 
@@ -60,3 +74,6 @@ export const env = result.data
 
 export const isProduction = env.NODE_ENV === 'production'
 export const isTest = env.NODE_ENV === 'test'
+
+/** Google Meet can only be offered once the OAuth client credentials are configured. */
+export const isGoogleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET)

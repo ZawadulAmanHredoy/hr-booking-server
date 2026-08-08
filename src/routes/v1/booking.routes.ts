@@ -5,6 +5,7 @@ import {
   getBookingHandler,
   listBookingsHandler,
   rescheduleBookingHandler,
+  retryMeetingHandler,
 } from '../../controllers/booking.controller.js'
 import { authenticate, loadUser } from '../../middlewares/auth.js'
 import { validateBody, validateParams, validateQuery } from '../../middlewares/validate.js'
@@ -35,3 +36,4 @@ bookingRouter.patch(
   validateBody(rescheduleBookingSchema),
   rescheduleBookingHandler,
 )
+bookingRouter.post('/:id/meeting/retry', validateParams(bookingIdParamsSchema), retryMeetingHandler)

@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken'
 import { env } from '../config/env.js'
-import { TOKEN_TYPES, type TokenType } from '../config/constants.js'
+import { GOOGLE_OAUTH, TOKEN_TYPES, type TokenType } from '../config/constants.js'
 
 export interface AccessTokenPayload {
   sub: string
@@ -26,6 +26,8 @@ function getExpiresIn(type: TokenType): string {
       return env.JWT_VERIFY_EMAIL_EXPIRES_IN
     case TOKEN_TYPES.RESET_PASSWORD:
       return env.JWT_RESET_PASSWORD_EXPIRES_IN
+    case TOKEN_TYPES.OAUTH_STATE:
+      return GOOGLE_OAUTH.STATE_TTL
     default:
       return env.JWT_REFRESH_EXPIRES_IN
   }
