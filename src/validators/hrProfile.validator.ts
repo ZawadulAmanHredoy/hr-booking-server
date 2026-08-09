@@ -7,9 +7,17 @@ import {
   type Specialization,
 } from '../config/constants.js'
 
-const specializationEnum = z.enum(
+export const specializationEnum = z.enum(
   Object.values(SPECIALIZATIONS) as [Specialization, ...Specialization[]],
 )
+
+export const workHistoryEntrySchema = z.object({
+  company: z.string().trim().min(1).max(150),
+  role: z.string().trim().min(1).max(150),
+  startYear: z.coerce.number().int().min(1950).max(2100),
+  endYear: z.coerce.number().int().min(1950).max(2100).optional(),
+  description: z.string().trim().max(300).optional(),
+})
 
 export const upsertProfileSchema = z.object({
   headline: z.string().trim().min(2).max(80),
@@ -19,6 +27,7 @@ export const upsertProfileSchema = z.object({
     .min(PROFILE_LIMITS.SPECIALIZATIONS_MIN)
     .max(PROFILE_LIMITS.SPECIALIZATIONS_MAX),
   yearsOfExperience: z.coerce.number().int().min(0).max(70),
+  companyName: z.string().trim().min(1).max(150).optional(),
   hourlyRateCents: z.coerce
     .number()
     .int()
@@ -42,6 +51,7 @@ export const upsertProfileSchema = z.object({
     )
     .max(PROFILE_LIMITS.CERTIFICATIONS_MAX)
     .optional(),
+  workHistory: z.array(workHistoryEntrySchema).max(PROFILE_LIMITS.WORK_HISTORY_MAX).optional(),
 })
 
 export const profileStatusSchema = z.object({

@@ -13,6 +13,14 @@ export interface Certification {
   year?: number
 }
 
+export interface WorkHistoryEntry {
+  company: string
+  role: string
+  startYear: number
+  endYear?: number
+  description?: string
+}
+
 export interface HRProfileDocument extends mongoose.Document {
   id: string
   userId: mongoose.Types.ObjectId
@@ -20,6 +28,7 @@ export interface HRProfileDocument extends mongoose.Document {
   bio: string
   specializations: Specialization[]
   yearsOfExperience: number
+  companyName?: string
   hourlyRateCents: number
   currency: Currency
   languages: string[]
@@ -27,6 +36,7 @@ export interface HRProfileDocument extends mongoose.Document {
   country?: string
   profileImageUrl?: string
   certifications: Certification[]
+  workHistory: WorkHistoryEntry[]
   status: ProfileStatus
   isAvailable: boolean
   rating: number
@@ -40,6 +50,17 @@ const certificationSchema = new Schema<Certification>(
     name: { type: String, required: true, trim: true, maxlength: 100 },
     issuer: { type: String, trim: true, maxlength: 100 },
     year: { type: Number, min: 1950, max: 2100 },
+  },
+  { _id: false },
+)
+
+const workHistorySchema = new Schema<WorkHistoryEntry>(
+  {
+    company: { type: String, required: true, trim: true, maxlength: 150 },
+    role: { type: String, required: true, trim: true, maxlength: 150 },
+    startYear: { type: Number, required: true, min: 1950, max: 2100 },
+    endYear: { type: Number, min: 1950, max: 2100 },
+    description: { type: String, trim: true, maxlength: 300 },
   },
   { _id: false },
 )
@@ -78,6 +99,11 @@ const hrProfileSchema = new Schema<HRProfileDocument>(
       min: 0,
       max: 70,
     },
+    companyName: {
+      type: String,
+      trim: true,
+      maxlength: 150,
+    },
     hourlyRateCents: {
       type: Number,
       required: true,
@@ -108,6 +134,10 @@ const hrProfileSchema = new Schema<HRProfileDocument>(
     },
     certifications: {
       type: [certificationSchema],
+      default: [],
+    },
+    workHistory: {
+      type: [workHistorySchema],
       default: [],
     },
     status: {

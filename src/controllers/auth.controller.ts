@@ -6,6 +6,7 @@ import {
   logout,
   refresh,
   register,
+  registerHr,
   resetPassword,
   toPublicUser,
   verifyEmail,
@@ -29,6 +30,23 @@ export async function registerHandler(
 ): Promise<void> {
   try {
     const user = await register(req.body)
+    sendSuccess(
+      res,
+      { user: toPublicUser(user), message: 'Registration successful. Please verify your email.' },
+      201,
+    )
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function registerHrHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const user = await registerHr(req.body)
     sendSuccess(
       res,
       { user: toPublicUser(user), message: 'Registration successful. Please verify your email.' },

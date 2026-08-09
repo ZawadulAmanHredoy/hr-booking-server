@@ -5,6 +5,9 @@ node_modules/
 dist/
 coverage/
 
+# User-uploaded files (local disk storage, not committed)
+uploads/*
+
 # Environment
 .env
 .env.local

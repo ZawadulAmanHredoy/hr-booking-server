@@ -68,8 +68,14 @@ export const PROFILE_LIMITS = {
   LANGUAGES_MIN: 1,
   LANGUAGES_MAX: 5,
   CERTIFICATIONS_MAX: 10,
+  WORK_HISTORY_MAX: 10,
   HOURLY_RATE_CENTS_MIN: 500,
   HOURLY_RATE_CENTS_MAX: 10_000_00,
+} as const
+
+export const UPLOAD_LIMITS = {
+  MAX_BYTES: 5 * 1024 * 1024,
+  ALLOWED_MIME_TYPES: ['image/jpeg', 'image/png', 'image/webp'] as const,
 } as const
 
 export const MEETING_PROVIDERS = {

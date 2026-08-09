@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler } from 'express'
 import { ZodError } from 'zod'
+import { MulterError } from 'multer'
 import { env } from '../config/env.js'
 import { logger } from '../config/logger.js'
 import { AppError } from '../utils/http-errors.js'
@@ -29,6 +30,14 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
         message: 'Invalid request.',
         details: err.flatten(),
       },
+    })
+    return
+  }
+
+  if (err instanceof MulterError) {
+    res.status(400).json({
+      success: false,
+      error: { code: 'BAD_REQUEST', message: err.message },
     })
     return
   }

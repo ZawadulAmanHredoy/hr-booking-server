@@ -1,6 +1,9 @@
 import { User, type UserDocument } from '../models/User.js'
 import { RefreshToken } from '../models/RefreshToken.js'
-import { AUTH_LIMITS, TOKEN_TYPES, USER_ROLES } from '../config/constants.js'
+import { HRProfile } from '../models/HRProfile.js'
+import type { WorkHistoryEntry } from '../models/HRProfile.js'
+import { AUTH_LIMITS, PROFILE_STATUS, TOKEN_TYPES, USER_ROLES } from '../config/constants.js'
+import type { Currency, Specialization } from '../config/constants.js'
 import { ConflictError, ForbiddenError, UnauthorizedError } from '../utils/http-errors.js'
 import { hashPassword, verifyPassword } from '../utils/password.js'
 import { signAccessToken, signGenericToken, verifyGenericToken } from '../utils/tokens.js'
@@ -14,6 +17,26 @@ export interface RegisterInput {
   firstName: string
   lastName: string
   password: string
+}
+
+export interface RegisterHrInput {
+  email: string
+  firstName: string
+  lastName: string
+  password: string
+  phone: string
+  profileImageUrl?: string
+  headline: string
+  bio: string
+  specializations: Specialization[]
+  yearsOfExperience: number
+  companyName: string
+  hourlyRateCents: number
+  currency: Currency
+  languages: string[]
+  city?: string
+  country?: string
+  workHistory: WorkHistoryEntry[]
 }
 
 export interface LoginInput {
@@ -58,6 +81,58 @@ export async function register(input: RegisterInput): Promise<UserDocument> {
   })
 
   logger.info({ userId: user.id, email: user.email }, 'User registered')
+  return user
+}
+
+/**
+ * Creates an HR consultant account directly — role is HR from creation, it never passes through
+ * USER. Pairs a User and a DRAFT HRProfile in one call. No multi-document transaction (the dev
+ * MongoDB runs standalone, matching the rest of this codebase's convention); a failure between
+ * the two creates is an accepted risk here, same as elsewhere in the project.
+ */
+export async function registerHr(input: RegisterHrInput): Promise<UserDocument> {
+  const existing = await User.findOne({ email: input.email.toLowerCase() })
+  if (existing) {
+    throw new ConflictError('An account with this email already exists.', {
+      code: 'EMAIL_ALREADY_REGISTERED',
+    })
+  }
+
+  const passwordHash = await hashPassword(input.password)
+  const user = await User.create({
+    email: input.email,
+    firstName: input.firstName,
+    lastName: input.lastName,
+    password: passwordHash,
+    phone: input.phone,
+    profileImageUrl: input.profileImageUrl,
+    role: USER_ROLES.HR,
+  })
+
+  await HRProfile.create({
+    userId: user._id,
+    headline: input.headline,
+    bio: input.bio,
+    specializations: input.specializations,
+    yearsOfExperience: input.yearsOfExperience,
+    companyName: input.companyName,
+    hourlyRateCents: input.hourlyRateCents,
+    currency: input.currency,
+    languages: input.languages,
+    city: input.city,
+    country: input.country,
+    profileImageUrl: input.profileImageUrl,
+    workHistory: input.workHistory,
+    status: PROFILE_STATUS.DRAFT,
+  })
+
+  const token = signGenericToken(user.id, TOKEN_TYPES.VERIFY_EMAIL)
+  await sendEmail({
+    to: user.email,
+    ...buildVerifyEmail({ firstName: user.firstName, token }),
+  })
+
+  logger.info({ userId: user.id, email: user.email }, 'HR consultant registered')
   return user
 }
 
