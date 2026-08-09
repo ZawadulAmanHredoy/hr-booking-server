@@ -49,7 +49,10 @@ export async function registerHrHandler(
     const user = await registerHr(req.body)
     sendSuccess(
       res,
-      { user: toPublicUser(user), message: 'Registration successful. Please verify your email.' },
+      {
+        user: toPublicUser(user),
+        message: 'Registration successful. You can log in right away.',
+      },
       201,
     )
   } catch (err) {

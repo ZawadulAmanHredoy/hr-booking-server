@@ -69,12 +69,27 @@ describe('POST /api/v1/auth/register-hr', () => {
     const user = await User.findOne({ email })
     expect(user?.role).toBe('HR')
     expect(user?.phone).toBe('+1 555 0100')
+    expect(user?.isEmailVerified).toBe(true)
 
     const profile = await HRProfile.findOne({ userId: user?._id })
     expect(profile).not.toBeNull()
     expect(profile?.status).toBe('DRAFT')
     expect(profile?.companyName).toBe('Acme Corp')
     expect(profile?.workHistory).toHaveLength(1)
+  })
+
+  it('can log in immediately, with no email-verification step', async () => {
+    const email = `${baseEmail}-login@example.com`
+    const payload = registerHrPayload(email)
+    const registered = await request(app).post('/api/v1/auth/register-hr').send(payload)
+    expect(registered.status).toBe(201)
+
+    const login = await request(app)
+      .post('/api/v1/auth/login')
+      .send({ email, password: payload.password })
+
+    expect(login.status).toBe(200)
+    expect(login.body.data.user.email).toBe(email)
   })
 
   it('rejects a duplicate email with 409', async () => {

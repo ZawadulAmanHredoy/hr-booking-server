@@ -110,6 +110,11 @@ export async function registerHr(input: RegisterHrInput): Promise<UserDocument> 
     phone: input.phone,
     profileImageUrl: input.profileImageUrl,
     role: USER_ROLES.HR,
+    // HR accounts skip the self-service email-click verification a plain USER goes through —
+    // the meaningful verification for a consultant is an admin reviewing their application
+    // (submit-for-review -> approve/reject), not confirming they own an inbox.
+    isEmailVerified: true,
+    emailVerifiedAt: new Date(),
   })
 
   try {
@@ -144,12 +149,6 @@ export async function registerHr(input: RegisterHrInput): Promise<UserDocument> 
     })
     throw err
   }
-
-  const token = signGenericToken(user.id, TOKEN_TYPES.VERIFY_EMAIL)
-  await sendEmail({
-    to: user.email,
-    ...buildVerifyEmail({ firstName: user.firstName, token }),
-  })
 
   logger.info({ userId: user.id, email: user.email }, 'HR consultant registered')
   return user
