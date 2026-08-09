@@ -42,7 +42,9 @@ async function createUser(role: UserRole, email: string) {
 }
 
 async function cleanup(): Promise<void> {
-  await HRProfile.deleteMany({})
+  const users = await User.find({ email: { $regex: `^${prefix}` } }).select('_id')
+  const ids = users.map((user) => user._id)
+  await HRProfile.deleteMany({ userId: { $in: ids } })
   await User.deleteMany({ email: { $regex: `^${prefix}` } })
 }
 

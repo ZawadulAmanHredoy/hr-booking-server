@@ -44,8 +44,10 @@ async function registerUser(email: string): Promise<string> {
 }
 
 async function cleanup(): Promise<void> {
+  const users = await User.find({ email: { $regex: `^${baseEmail}` } }).select('_id')
+  const ids = users.map((user) => user._id)
+  await RefreshToken.deleteMany({ userId: { $in: ids } })
   await User.deleteMany({ email: { $regex: `^${baseEmail}` } })
-  await RefreshToken.deleteMany({})
 }
 
 beforeAll(async () => {
