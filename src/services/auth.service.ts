@@ -3,13 +3,14 @@ import { RefreshToken } from '../models/RefreshToken.js'
 import { HRProfile } from '../models/HRProfile.js'
 import type { WorkHistoryEntry } from '../models/HRProfile.js'
 import { AUTH_LIMITS, PROFILE_STATUS, TOKEN_TYPES, USER_ROLES } from '../config/constants.js'
-import type { Currency, Specialization } from '../config/constants.js'
+import type { Currency } from '../config/constants.js'
 import { ConflictError, ForbiddenError, UnauthorizedError } from '../utils/http-errors.js'
 import { hashPassword, verifyPassword } from '../utils/password.js'
 import { signAccessToken, signGenericToken, verifyGenericToken } from '../utils/tokens.js'
 import { hashRefreshToken, randomRefreshToken } from '../utils/refresh-token.js'
 import { sendEmail } from './email/index.js'
 import { buildResetPasswordEmail, buildVerifyEmail } from './email/templates/auth.templates.js'
+import { assertActiveSpecializations } from './specialization.service.js'
 import { logger } from '../config/logger.js'
 
 export interface RegisterInput {
@@ -28,7 +29,7 @@ export interface RegisterHrInput {
   profileImageUrl?: string
   headline: string
   bio: string
-  specializations: Specialization[]
+  specializations: string[]
   yearsOfExperience: number
   companyName: string
   hourlyRateCents: number
@@ -97,6 +98,8 @@ export async function registerHr(input: RegisterHrInput): Promise<UserDocument> 
       code: 'EMAIL_ALREADY_REGISTERED',
     })
   }
+
+  await assertActiveSpecializations(input.specializations)
 
   const passwordHash = await hashPassword(input.password)
   const user = await User.create({

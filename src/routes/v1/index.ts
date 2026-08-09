@@ -5,6 +5,9 @@ import { bookingRouter } from './booking.routes.js'
 import { hrProfileRouter } from './hrProfile.routes.js'
 import { integrationRouter } from './integration.routes.js'
 import { uploadRouter } from './upload.routes.js'
+import { specializationRouter } from './specialization.routes.js'
+import { reportRouter } from './report.routes.js'
+import { adminRouter } from './admin.routes.js'
 
 export const apiV1Router: Router = Router()
 
@@ -14,6 +17,9 @@ apiV1Router.use('/availability', availabilityRouter)
 apiV1Router.use('/bookings', bookingRouter)
 apiV1Router.use('/integrations', integrationRouter)
 apiV1Router.use('/uploads', uploadRouter)
+apiV1Router.use('/specializations', specializationRouter)
+apiV1Router.use('/reports', reportRouter)
+apiV1Router.use('/admin', adminRouter)
 
 apiV1Router.get('/', (_req, res) => {
   res.status(200).json({

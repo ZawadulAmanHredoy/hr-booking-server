@@ -1,6 +1,8 @@
 import mongoose from 'mongoose'
 import {
   ACTIVE_BOOKING_STATUSES,
+  AUDIT_ACTIONS,
+  AUDIT_RESOURCE_TYPES,
   BOOKING_LIMITS,
   BOOKING_STATUS,
   CANCELLED_BY,
@@ -41,6 +43,7 @@ import type {
 } from '../validators/booking.validator.js'
 import { getMeetingQueue } from '../queues/meeting.queue.js'
 import { getReminderQueue, REMINDER_LEAD_MS, reminderJobId } from '../queues/reminder.queue.js'
+import { recordAuditLog } from './audit-log.service.js'
 import { enqueueEmail } from './email/index.js'
 import {
   buildBookingConfirmation,
@@ -208,9 +211,63 @@ export async function cancelBooking(
 
   logger.info({ bookingId: booking.id, cancelledBy: role }, 'Booking cancelled')
 
+  if (role === CANCELLED_BY.ADMIN) {
+    await recordAuditLog({
+      actorId: actor.id,
+      actorRole: actor.role,
+      action: AUDIT_ACTIONS.BOOKING_CANCELLED,
+      resourceType: AUDIT_RESOURCE_TYPES.BOOKING,
+      resourceId: booking.id,
+      metadata: reason ? { reason } : undefined,
+    })
+  }
+
   await dispatchBookingCancelled(booking, role)
 
   return getBookingForActor(actor, booking.id)
+}
+
+export interface AdminListBookingsQuery {
+  page: number
+  limit: number
+  status?: string
+  from?: Date
+  to?: Date
+  userId?: string
+  hrUserId?: string
+}
+
+/** Unscoped listing across every booking on the platform — admin-only. */
+export async function listBookingsForAdmin(
+  query: AdminListBookingsQuery,
+): Promise<{ data: BookingDocument[]; pagination: Pagination }> {
+  const filter: Record<string, unknown> = {}
+  if (query.status) filter.status = query.status
+  if (query.userId) filter.userId = query.userId
+  if (query.hrUserId) filter.hrUserId = query.hrUserId
+  if (query.from || query.to) {
+    const range: Record<string, Date> = {}
+    if (query.from) range.$gte = query.from
+    if (query.to) range.$lte = query.to
+    filter.startAt = range
+  }
+
+  const total = await Booking.countDocuments(filter)
+  const totalPages = Math.max(1, Math.ceil(total / query.limit))
+  const page = Math.min(query.page, totalPages)
+
+  const bookings = await Booking.find(filter)
+    .sort({ startAt: -1 })
+    .skip((page - 1) * query.limit)
+    .limit(query.limit)
+    .populate('userId', 'firstName lastName')
+    .populate('hrUserId', 'firstName lastName')
+    .populate('hrProfileId', 'headline')
+
+  return {
+    data: bookings,
+    pagination: { page, limit: query.limit, total, totalPages },
+  }
 }
 
 export async function rescheduleBooking(

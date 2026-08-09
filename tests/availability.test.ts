@@ -4,7 +4,7 @@ import request from 'supertest'
 import { createApp } from '../src/app.js'
 import { connectDatabase, disconnectDatabase } from '../src/config/database.js'
 import { connectRedis, disconnectRedis } from '../src/config/redis.js'
-import { USER_ROLES, type UserRole } from '../src/config/constants.js'
+import { PROFILE_STATUS, USER_ROLES, type UserRole } from '../src/config/constants.js'
 import { signAccessToken } from '../src/utils/tokens.js'
 import { User } from '../src/models/User.js'
 import { HRProfile } from '../src/models/HRProfile.js'
@@ -57,12 +57,12 @@ async function createUser(role: UserRole, email: string) {
 async function createPublishedHr(email: string): Promise<{ userId: string; profileId: string }> {
   const hr = await createUser(USER_ROLES.HR, email)
   await request(app).put('/api/v1/profiles/me').set(bearer(hr.id, 'HR')).send(profilePayload)
-  const publish = await request(app)
-    .patch('/api/v1/profiles/me/publish')
-    .set(bearer(hr.id, 'HR'))
-    .send({ status: 'PUBLISHED' })
+  const submit = await request(app).patch('/api/v1/profiles/me/submit').set(bearer(hr.id, 'HR'))
+  await HRProfile.findByIdAndUpdate(submit.body.data.profile.id, {
+    status: PROFILE_STATUS.PUBLISHED,
+  })
 
-  return { userId: hr.id, profileId: publish.body.data.profile.id }
+  return { userId: hr.id, profileId: submit.body.data.profile.id }
 }
 
 function daysFromNow(days: number): Date {

@@ -1,10 +1,9 @@
 import mongoose, { Schema } from 'mongoose'
 import {
+  ADMIN_LIMITS,
   PROFILE_STATUS,
-  SPECIALIZATIONS,
   type Currency,
   type ProfileStatus,
-  type Specialization,
 } from '../config/constants.js'
 
 export interface Certification {
@@ -26,7 +25,7 @@ export interface HRProfileDocument extends mongoose.Document {
   userId: mongoose.Types.ObjectId
   headline: string
   bio: string
-  specializations: Specialization[]
+  specializations: string[]
   yearsOfExperience: number
   companyName?: string
   hourlyRateCents: number
@@ -38,6 +37,9 @@ export interface HRProfileDocument extends mongoose.Document {
   certifications: Certification[]
   workHistory: WorkHistoryEntry[]
   status: ProfileStatus
+  rejectionReason?: string
+  reviewedBy?: mongoose.Types.ObjectId
+  reviewedAt?: Date
   isAvailable: boolean
   rating: number
   ratingCount: number
@@ -85,9 +87,10 @@ const hrProfileSchema = new Schema<HRProfileDocument>(
       trim: true,
       maxlength: 2000,
     },
+    // Specialization slugs are validated against the `Specialization` collection at the service
+    // layer (dynamic, admin-managed), not via a static Mongoose enum.
     specializations: {
       type: [String],
-      enum: Object.values(SPECIALIZATIONS),
       validate: {
         validator: (values: string[]) => values.length > 0,
         message: 'At least one specialization is required',
@@ -145,6 +148,18 @@ const hrProfileSchema = new Schema<HRProfileDocument>(
       enum: Object.values(PROFILE_STATUS),
       default: PROFILE_STATUS.DRAFT,
       index: true,
+    },
+    rejectionReason: {
+      type: String,
+      trim: true,
+      maxlength: ADMIN_LIMITS.REJECTION_REASON_MAX,
+    },
+    reviewedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    reviewedAt: {
+      type: Date,
     },
     isAvailable: {
       type: Boolean,

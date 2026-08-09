@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { AUTH_LIMITS, CURRENCIES, PROFILE_LIMITS } from '../config/constants.js'
-import { specializationEnum, workHistoryEntrySchema } from './hrProfile.validator.js'
+import { specializationSlugSchema, workHistoryEntrySchema } from './hrProfile.validator.js'
 
 const passwordSchema = z
   .string()
@@ -25,7 +25,7 @@ export const registerHrSchema = registerSchema.extend({
   headline: z.string().trim().min(2).max(80),
   bio: z.string().trim().min(10).max(2000),
   specializations: z
-    .array(specializationEnum)
+    .array(specializationSlugSchema)
     .min(PROFILE_LIMITS.SPECIALIZATIONS_MIN)
     .max(PROFILE_LIMITS.SPECIALIZATIONS_MAX),
   yearsOfExperience: z.coerce.number().int().min(0).max(70),

@@ -1,6 +1,7 @@
 import mongoose from 'mongoose'
 import { env } from './env.js'
 import { logger } from './logger.js'
+import { ensureDefaultSpecializations } from '../services/specialization.service.js'
 
 function redactMongoUri(uri: string): string {
   try {
@@ -17,6 +18,7 @@ export async function connectDatabase(): Promise<void> {
   mongoose.set('strictQuery', true)
   await mongoose.connect(env.MONGO_URI, { serverSelectionTimeoutMS: 5000 })
   logger.info({ uri: redactMongoUri(env.MONGO_URI) }, 'MongoDB connected')
+  await ensureDefaultSpecializations()
 }
 
 export async function disconnectDatabase(): Promise<void> {

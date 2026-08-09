@@ -4,8 +4,9 @@ import {
   getMyProfileHandler,
   getProfileHandler,
   listProfilesHandler,
-  publishProfileHandler,
+  submitProfileHandler,
   upsertProfileHandler,
+  withdrawProfileHandler,
 } from '../../controllers/hr-profile.controller.js'
 import { authenticate, loadUser, requireRole } from '../../middlewares/auth.js'
 import { validateBody, validateParams, validateQuery } from '../../middlewares/validate.js'
@@ -13,7 +14,6 @@ import {
   availabilitySchema,
   listProfilesQuerySchema,
   profileIdParamsSchema,
-  profileStatusSchema,
   upsertProfileSchema,
 } from '../../validators/hrProfile.validator.js'
 import { USER_ROLES } from '../../config/constants.js'
@@ -32,12 +32,18 @@ hrProfileRouter.put(
 // HR-only (must be registered before the public /:id catch-all)
 hrProfileRouter.get('/me', authenticate, loadUser, requireRole(USER_ROLES.HR), getMyProfileHandler)
 hrProfileRouter.patch(
-  '/me/publish',
+  '/me/submit',
   authenticate,
   loadUser,
   requireRole(USER_ROLES.HR),
-  validateBody(profileStatusSchema),
-  publishProfileHandler,
+  submitProfileHandler,
+)
+hrProfileRouter.patch(
+  '/me/withdraw',
+  authenticate,
+  loadUser,
+  requireRole(USER_ROLES.HR),
+  withdrawProfileHandler,
 )
 hrProfileRouter.patch(
   '/me/availability',

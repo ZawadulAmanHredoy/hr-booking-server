@@ -4,9 +4,10 @@ import {
   getPublicProfile,
   listPublicProfiles,
   setAvailability,
-  setProfileStatus,
+  submitProfileForReview,
   toOwnProfile,
   upsertProfile,
+  withdrawProfile,
 } from '../services/hr-profile.service.js'
 import { sendPaginated, sendSuccess } from '../utils/response.js'
 import { NotFoundError } from '../utils/http-errors.js'
@@ -46,7 +47,7 @@ export async function getMyProfileHandler(
   }
 }
 
-export async function publishProfileHandler(
+export async function submitProfileHandler(
   req: Request,
   res: Response,
   next: NextFunction,
@@ -56,7 +57,24 @@ export async function publishProfileHandler(
       next(new NotFoundError('Account not found.'))
       return
     }
-    const profile = await setProfileStatus(req.user.id, req.body.status)
+    const profile = await submitProfileForReview(req.user.id)
+    sendSuccess(res, { profile: toOwnProfile(profile) })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export async function withdrawProfileHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    if (!req.user) {
+      next(new NotFoundError('Account not found.'))
+      return
+    }
+    const profile = await withdrawProfile(req.user.id)
     sendSuccess(res, { profile: toOwnProfile(profile) })
   } catch (err) {
     next(err)

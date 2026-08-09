@@ -4,7 +4,7 @@ import request from 'supertest'
 import { createApp } from '../src/app.js'
 import { connectDatabase, disconnectDatabase } from '../src/config/database.js'
 import { connectRedis, disconnectRedis } from '../src/config/redis.js'
-import { USER_ROLES, type UserRole } from '../src/config/constants.js'
+import { PROFILE_STATUS, USER_ROLES, type UserRole } from '../src/config/constants.js'
 import { signAccessToken } from '../src/utils/tokens.js'
 import { User } from '../src/models/User.js'
 import { HRProfile } from '../src/models/HRProfile.js'
@@ -27,6 +27,20 @@ const profilePayload = {
 
 function bearer(userId: string, role: string): { Authorization: string } {
   return { Authorization: `Bearer ${signAccessToken(userId, role)}` }
+}
+
+/**
+ * Submits a profile for review and flips it straight to PUBLISHED via the model, bypassing the
+ * admin approval HTTP call. The approve/reject endpoints themselves are covered end-to-end in
+ * admin.test.ts; the tests in this file only need a published fixture.
+ */
+async function publishProfile(
+  userId: string,
+): Promise<{ body: { data: { profile: { id: string } } } }> {
+  const submit = await request(app).patch('/api/v1/profiles/me/submit').set(bearer(userId, 'HR'))
+  const profileId = submit.body.data.profile.id as string
+  await HRProfile.findByIdAndUpdate(profileId, { status: PROFILE_STATUS.PUBLISHED })
+  return { body: { data: { profile: { id: profileId } } } }
 }
 
 async function createUser(role: UserRole, email: string) {
@@ -149,6 +163,61 @@ describe('Own profile (HR-only)', () => {
   })
 })
 
+describe('Review workflow (submit / withdraw)', () => {
+  it('submits a draft for review', async () => {
+    const user = await createUser(USER_ROLES.HR, `${prefix}-submit@example.com`)
+    await request(app).put('/api/v1/profiles/me').set(bearer(user.id, 'HR')).send(profilePayload)
+
+    const res = await request(app).patch('/api/v1/profiles/me/submit').set(bearer(user.id, 'HR'))
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.profile.status).toBe('PENDING_REVIEW')
+  })
+
+  it('rejects submitting a profile that is already pending review', async () => {
+    const user = await createUser(USER_ROLES.HR, `${prefix}-submit-twice@example.com`)
+    await request(app).put('/api/v1/profiles/me').set(bearer(user.id, 'HR')).send(profilePayload)
+    await request(app).patch('/api/v1/profiles/me/submit').set(bearer(user.id, 'HR'))
+
+    const res = await request(app).patch('/api/v1/profiles/me/submit').set(bearer(user.id, 'HR'))
+
+    expect(res.status).toBe(409)
+    expect(res.body.error.code).toBe('CONFLICT')
+  })
+
+  it('withdraws a pending profile back to draft', async () => {
+    const user = await createUser(USER_ROLES.HR, `${prefix}-withdraw@example.com`)
+    await request(app).put('/api/v1/profiles/me').set(bearer(user.id, 'HR')).send(profilePayload)
+    await request(app).patch('/api/v1/profiles/me/submit').set(bearer(user.id, 'HR'))
+
+    const res = await request(app).patch('/api/v1/profiles/me/withdraw').set(bearer(user.id, 'HR'))
+
+    expect(res.status).toBe(200)
+    expect(res.body.data.profile.status).toBe('DRAFT')
+  })
+
+  it('rejects withdrawing a profile that is still a draft', async () => {
+    const user = await createUser(USER_ROLES.HR, `${prefix}-withdraw-draft@example.com`)
+    await request(app).put('/api/v1/profiles/me').set(bearer(user.id, 'HR')).send(profilePayload)
+
+    const res = await request(app).patch('/api/v1/profiles/me/withdraw').set(bearer(user.id, 'HR'))
+
+    expect(res.status).toBe(409)
+  })
+
+  it('rejects unauthenticated and non-HR requests', async () => {
+    const user = await createUser(USER_ROLES.USER, `${prefix}-submit-forbidden@example.com`)
+
+    const noAuth = await request(app).patch('/api/v1/profiles/me/submit')
+    expect(noAuth.status).toBe(401)
+
+    const wrongRole = await request(app)
+      .patch('/api/v1/profiles/me/submit')
+      .set(bearer(user.id, USER_ROLES.USER))
+    expect(wrongRole.status).toBe(403)
+  })
+})
+
 describe('Public listing', () => {
   it('only lists published profiles', async () => {
     const published = await createUser(USER_ROLES.HR, `${prefix}-pub@example.com`)
@@ -159,11 +228,7 @@ describe('Public listing', () => {
       .send(profilePayload)
     await request(app).put('/api/v1/profiles/me').set(bearer(draft.id, 'HR')).send(profilePayload)
 
-    const publishRes = await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(published.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
-    expect(publishRes.status).toBe(200)
+    const publishRes = await publishProfile(published.id)
 
     const list = await request(app).get('/api/v1/profiles')
 
@@ -176,10 +241,7 @@ describe('Public listing', () => {
   it('includes the consultant name on cards', async () => {
     const user = await createUser(USER_ROLES.HR, `${prefix}-named@example.com`)
     await request(app).put('/api/v1/profiles/me').set(bearer(user.id, 'HR')).send(profilePayload)
-    await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(user.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
+    await publishProfile(user.id)
 
     const list = await request(app).get('/api/v1/profiles')
 
@@ -199,14 +261,8 @@ describe('Public listing', () => {
       .put('/api/v1/profiles/me')
       .set(bearer(b.id, 'HR'))
       .send({ ...profilePayload, specializations: ['HRIS'], languages: ['French'] })
-    await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(a.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
-    await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(b.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
+    await publishProfile(a.id)
+    await publishProfile(b.id)
 
     const specRes = await request(app).get('/api/v1/profiles').query({ specialization: 'HRIS' })
     expect(specRes.status).toBe(200)
@@ -229,14 +285,8 @@ describe('Public listing', () => {
       .put('/api/v1/profiles/me')
       .set(bearer(b.id, 'HR'))
       .send({ ...profilePayload, headline: 'Senior Recruiter', hourlyRateCents: 12000 })
-    await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(a.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
-    await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(b.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
+    await publishProfile(a.id)
+    await publishProfile(b.id)
 
     const search = await request(app).get('/api/v1/profiles').query({ search: 'Recruiter' })
     expect(search.body.data).toHaveLength(2)
@@ -259,14 +309,8 @@ describe('Public listing', () => {
       .put('/api/v1/profiles/me')
       .set(bearer(b.id, 'HR'))
       .send({ ...profilePayload, hourlyRateCents: 9000 })
-    await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(a.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
-    await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(b.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
+    await publishProfile(a.id)
+    await publishProfile(b.id)
 
     const res = await request(app)
       .get('/api/v1/profiles')
@@ -287,10 +331,7 @@ describe('Public profile detail', () => {
   it('returns a published profile by id', async () => {
     const user = await createUser(USER_ROLES.HR, `${prefix}-detail@example.com`)
     await request(app).put('/api/v1/profiles/me').set(bearer(user.id, 'HR')).send(profilePayload)
-    const publish = await request(app)
-      .patch('/api/v1/profiles/me/publish')
-      .set(bearer(user.id, 'HR'))
-      .send({ status: 'PUBLISHED' })
+    const publish = await publishProfile(user.id)
     const id = publish.body.data.profile.id
 
     const res = await request(app).get(`/api/v1/profiles/${id}`)

@@ -1,10 +1,27 @@
 import { HRProfile, type HRProfileDocument } from '../models/HRProfile.js'
 import { User, type UserDocument } from '../models/User.js'
-import { PROFILE_STATUS, USER_ROLES } from '../config/constants.js'
-import { NotFoundError } from '../utils/http-errors.js'
+import {
+  AUDIT_ACTIONS,
+  AUDIT_RESOURCE_TYPES,
+  PROFILE_STATUS,
+  USER_ROLES,
+} from '../config/constants.js'
+import { ConflictError, NotFoundError } from '../utils/http-errors.js'
 import { logger } from '../config/logger.js'
+import { assertActiveSpecializations } from './specialization.service.js'
+import { recordAuditLog } from './audit-log.service.js'
+import { enqueueEmail } from './email/index.js'
+import {
+  buildProfileApproved,
+  buildProfileRejected,
+} from './email/templates/hr-profile.templates.js'
 import type { Pagination } from '../utils/response.js'
 import type { ListProfilesQuery, UpsertProfileInput } from '../validators/hrProfile.validator.js'
+
+export interface Actor {
+  id: string
+  role: string
+}
 
 export interface UpsertProfileResult {
   profile: HRProfileDocument
@@ -19,6 +36,8 @@ export async function upsertProfile(
   userId: string,
   input: UpsertProfileInput,
 ): Promise<UpsertProfileResult> {
+  await assertActiveSpecializations(input.specializations)
+
   const existing = await HRProfile.findOne({ userId })
 
   if (existing) {
@@ -71,16 +90,151 @@ export async function getProfileByUserId(userId: string): Promise<HRProfileDocum
   return profile
 }
 
-export async function setProfileStatus(
-  userId: string,
-  status: 'DRAFT' | 'PUBLISHED',
-): Promise<HRProfileDocument> {
+/** HR submits a draft (or a previously rejected profile) for admin review. */
+export async function submitProfileForReview(userId: string): Promise<HRProfileDocument> {
   const profile = await HRProfile.findOne({ userId })
   if (!profile) {
     throw new NotFoundError('Profile not found.')
   }
-  profile.status = status
+  if (profile.status !== PROFILE_STATUS.DRAFT && profile.status !== PROFILE_STATUS.REJECTED) {
+    throw new ConflictError('Only a draft or rejected profile can be submitted for review.')
+  }
+  profile.status = PROFILE_STATUS.PENDING_REVIEW
+  profile.rejectionReason = undefined
   await profile.save()
+  return profile
+}
+
+/** HR pulls a pending or live profile back to draft — e.g. to pause bookings or make edits. */
+export async function withdrawProfile(userId: string): Promise<HRProfileDocument> {
+  const profile = await HRProfile.findOne({ userId })
+  if (!profile) {
+    throw new NotFoundError('Profile not found.')
+  }
+  if (
+    profile.status !== PROFILE_STATUS.PENDING_REVIEW &&
+    profile.status !== PROFILE_STATUS.PUBLISHED
+  ) {
+    throw new ConflictError('This profile cannot be withdrawn from its current state.')
+  }
+  profile.status = PROFILE_STATUS.DRAFT
+  await profile.save()
+  return profile
+}
+
+/** Admin-only: publishes a profile that is waiting for review. */
+export async function approveProfile(actor: Actor, profileId: string): Promise<HRProfileDocument> {
+  const profile = await HRProfile.findById(profileId)
+  if (!profile) {
+    throw new NotFoundError('Profile not found.')
+  }
+  if (profile.status !== PROFILE_STATUS.PENDING_REVIEW) {
+    throw new ConflictError('Only a profile pending review can be approved.')
+  }
+
+  profile.status = PROFILE_STATUS.PUBLISHED
+  profile.rejectionReason = undefined
+  profile.reviewedBy = actor.id as unknown as typeof profile.reviewedBy
+  profile.reviewedAt = new Date()
+  await profile.save()
+
+  await recordAuditLog({
+    actorId: actor.id,
+    actorRole: actor.role,
+    action: AUDIT_ACTIONS.HR_PROFILE_APPROVED,
+    resourceType: AUDIT_RESOURCE_TYPES.HR_PROFILE,
+    resourceId: profile.id,
+  })
+
+  const hrUser = await User.findById(profile.userId).select('email firstName')
+  if (hrUser) {
+    enqueueEmail({ to: hrUser.email, ...buildProfileApproved(hrUser.firstName) })
+  }
+
+  return profile
+}
+
+/** Admin-only: rejects a profile that is pending review, or unpublishes a live one for cause. */
+export async function rejectProfile(
+  actor: Actor,
+  profileId: string,
+  reason: string,
+): Promise<HRProfileDocument> {
+  const profile = await HRProfile.findById(profileId)
+  if (!profile) {
+    throw new NotFoundError('Profile not found.')
+  }
+  if (
+    profile.status !== PROFILE_STATUS.PENDING_REVIEW &&
+    profile.status !== PROFILE_STATUS.PUBLISHED
+  ) {
+    throw new ConflictError('Only a pending or published profile can be rejected.')
+  }
+
+  profile.status = PROFILE_STATUS.REJECTED
+  profile.rejectionReason = reason
+  profile.reviewedBy = actor.id as unknown as typeof profile.reviewedBy
+  profile.reviewedAt = new Date()
+  await profile.save()
+
+  await recordAuditLog({
+    actorId: actor.id,
+    actorRole: actor.role,
+    action: AUDIT_ACTIONS.HR_PROFILE_REJECTED,
+    resourceType: AUDIT_RESOURCE_TYPES.HR_PROFILE,
+    resourceId: profile.id,
+    metadata: { reason },
+  })
+
+  const hrUser = await User.findById(profile.userId).select('email firstName')
+  if (hrUser) {
+    enqueueEmail({ to: hrUser.email, ...buildProfileRejected(hrUser.firstName, reason) })
+  }
+
+  return profile
+}
+
+export interface AdminListProfilesQuery {
+  page: number
+  limit: number
+  status?: string
+  search?: string
+}
+
+export async function listProfilesForAdmin(
+  query: AdminListProfilesQuery,
+): Promise<{ data: ReturnType<typeof toAdminProfile>[]; pagination: Pagination }> {
+  const filter: Record<string, unknown> = {}
+  if (query.status) filter.status = query.status
+  if (query.search) {
+    const pattern = new RegExp(escapeRegex(query.search), 'i')
+    filter.$or = [{ headline: pattern }, { companyName: pattern }]
+  }
+
+  const total = await HRProfile.countDocuments(filter)
+  const totalPages = Math.max(1, Math.ceil(total / query.limit))
+  const page = Math.min(query.page, totalPages)
+
+  const profiles = (await HRProfile.find(filter)
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * query.limit)
+    .limit(query.limit)
+    .populate('userId', 'firstName lastName email status')) as unknown as PopulatedProfile[]
+
+  return {
+    data: profiles.map(toAdminProfile),
+    pagination: { page, limit: query.limit, total, totalPages },
+  }
+}
+
+export async function getProfileForAdminById(profileId: string): Promise<HRProfileDocument> {
+  const profile = await HRProfile.findById(profileId).populate(
+    'userId',
+    'firstName lastName email status',
+  )
+  if (!profile) {
+    throw new NotFoundError('Profile not found.')
+  }
   return profile
 }
 
@@ -186,6 +340,7 @@ export function toOwnProfile(profile: HRProfileDocument): Record<string, unknown
     certifications: profile.certifications,
     workHistory: profile.workHistory,
     status: profile.status,
+    rejectionReason: profile.rejectionReason ?? undefined,
     isAvailable: profile.isAvailable,
     rating: profile.rating,
     ratingCount: profile.ratingCount,
@@ -224,6 +379,47 @@ export function toPublicProfile(
     rating: profile.rating,
     ratingCount: profile.ratingCount,
     createdAt: profile.createdAt,
+  }
+}
+
+export function toAdminProfile(
+  profile: PopulatedProfile | HRProfileDocument,
+): Record<string, unknown> {
+  const populated = profile as PopulatedProfile
+  const user = populated.userId as unknown as {
+    id?: string
+    firstName?: string
+    lastName?: string
+    email?: string
+    status?: string
+  } | null
+
+  return {
+    id: profile.id,
+    user:
+      user && typeof user === 'object' && 'email' in user
+        ? {
+            id: user.id,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            status: user.status,
+          }
+        : undefined,
+    headline: profile.headline,
+    specializations: profile.specializations,
+    yearsOfExperience: profile.yearsOfExperience,
+    companyName: profile.companyName ?? undefined,
+    hourlyRateCents: profile.hourlyRateCents,
+    currency: profile.currency,
+    status: profile.status,
+    rejectionReason: profile.rejectionReason ?? undefined,
+    reviewedAt: profile.reviewedAt ?? undefined,
+    isAvailable: profile.isAvailable,
+    rating: profile.rating,
+    ratingCount: profile.ratingCount,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
   }
 }
 

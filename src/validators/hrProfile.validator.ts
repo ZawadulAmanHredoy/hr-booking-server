@@ -1,15 +1,9 @@
 import { z } from 'zod'
-import {
-  CURRENCIES,
-  PROFILE_LIMITS,
-  PROFILE_STATUS,
-  SPECIALIZATIONS,
-  type Specialization,
-} from '../config/constants.js'
+import { CURRENCIES, PROFILE_LIMITS } from '../config/constants.js'
 
-export const specializationEnum = z.enum(
-  Object.values(SPECIALIZATIONS) as [Specialization, ...Specialization[]],
-)
+// Specialization slugs are admin-managed (see `Specialization` model); the shape here is just a
+// non-empty string, and validity/activeness is checked against the DB in the service layer.
+export const specializationSlugSchema = z.string().trim().min(1).max(60)
 
 export const workHistoryEntrySchema = z.object({
   company: z.string().trim().min(1).max(150),
@@ -23,7 +17,7 @@ export const upsertProfileSchema = z.object({
   headline: z.string().trim().min(2).max(80),
   bio: z.string().trim().min(10).max(2000),
   specializations: z
-    .array(specializationEnum)
+    .array(specializationSlugSchema)
     .min(PROFILE_LIMITS.SPECIALIZATIONS_MIN)
     .max(PROFILE_LIMITS.SPECIALIZATIONS_MAX),
   yearsOfExperience: z.coerce.number().int().min(0).max(70),
@@ -54,10 +48,6 @@ export const upsertProfileSchema = z.object({
   workHistory: z.array(workHistoryEntrySchema).max(PROFILE_LIMITS.WORK_HISTORY_MAX).optional(),
 })
 
-export const profileStatusSchema = z.object({
-  status: z.enum([PROFILE_STATUS.DRAFT, PROFILE_STATUS.PUBLISHED]),
-})
-
 export const availabilitySchema = z.object({
   isAvailable: z.boolean(),
 })
@@ -70,7 +60,7 @@ export const listProfilesQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(12),
   search: z.string().trim().min(1).max(100).optional(),
-  specialization: specializationEnum.optional(),
+  specialization: specializationSlugSchema.optional(),
   language: z.string().trim().min(1).max(30).optional(),
   minRateCents: z.coerce.number().int().min(0).optional(),
   maxRateCents: z.coerce.number().int().min(0).optional(),
