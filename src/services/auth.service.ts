@@ -109,22 +109,38 @@ export async function registerHr(input: RegisterHrInput): Promise<UserDocument> 
     role: USER_ROLES.HR,
   })
 
-  await HRProfile.create({
-    userId: user._id,
-    headline: input.headline,
-    bio: input.bio,
-    specializations: input.specializations,
-    yearsOfExperience: input.yearsOfExperience,
-    companyName: input.companyName,
-    hourlyRateCents: input.hourlyRateCents,
-    currency: input.currency,
-    languages: input.languages,
-    city: input.city,
-    country: input.country,
-    profileImageUrl: input.profileImageUrl,
-    workHistory: input.workHistory,
-    status: PROFILE_STATUS.DRAFT,
-  })
+  try {
+    await HRProfile.create({
+      userId: user._id,
+      headline: input.headline,
+      bio: input.bio,
+      specializations: input.specializations,
+      yearsOfExperience: input.yearsOfExperience,
+      companyName: input.companyName,
+      hourlyRateCents: input.hourlyRateCents,
+      currency: input.currency,
+      languages: input.languages,
+      city: input.city,
+      country: input.country,
+      profileImageUrl: input.profileImageUrl,
+      workHistory: input.workHistory,
+      status: PROFILE_STATUS.DRAFT,
+    })
+  } catch (err) {
+    // No multi-document transaction (standalone dev MongoDB) — if the profile create fails after
+    // the account was already created, delete the account rather than strand it as HR with no
+    // profile. Same failure mode as upsertProfile(), confirmed to actually happen in practice.
+    await User.deleteOne({ _id: user._id }).catch((rollbackErr: unknown) => {
+      logger.error(
+        {
+          userId: user.id,
+          err: rollbackErr instanceof Error ? rollbackErr.message : rollbackErr,
+        },
+        'Failed to roll back orphaned user after HR profile creation failed',
+      )
+    })
+    throw err
+  }
 
   const token = signGenericToken(user.id, TOKEN_TYPES.VERIFY_EMAIL)
   await sendEmail({

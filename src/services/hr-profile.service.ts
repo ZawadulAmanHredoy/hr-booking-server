@@ -2,6 +2,7 @@ import { HRProfile, type HRProfileDocument } from '../models/HRProfile.js'
 import { User, type UserDocument } from '../models/User.js'
 import { PROFILE_STATUS, USER_ROLES } from '../config/constants.js'
 import { NotFoundError } from '../utils/http-errors.js'
+import { logger } from '../config/logger.js'
 import type { Pagination } from '../utils/response.js'
 import type { ListProfilesQuery, UpsertProfileInput } from '../validators/hrProfile.validator.js'
 
@@ -37,13 +38,29 @@ export async function upsertProfile(
     await user.save()
   }
 
-  const profile = await HRProfile.create({
-    userId,
-    ...input,
-    status: PROFILE_STATUS.DRAFT,
-  })
+  try {
+    const profile = await HRProfile.create({
+      userId,
+      ...input,
+      status: PROFILE_STATUS.DRAFT,
+    })
 
-  return { profile, upgraded }
+    return { profile, upgraded }
+  } catch (err) {
+    // The dev MongoDB is standalone (no multi-document transactions), so the role flip above and
+    // this create() aren't atomic. Without this, a failure here silently strands the account as
+    // HR with no profile — confirmed to actually happen, not just a theoretical risk.
+    if (upgraded) {
+      user.role = USER_ROLES.USER
+      await user.save().catch((rollbackErr: unknown) => {
+        logger.error(
+          { userId, err: rollbackErr instanceof Error ? rollbackErr.message : rollbackErr },
+          'Failed to roll back HR role upgrade after profile creation failed',
+        )
+      })
+    }
+    throw err
+  }
 }
 
 export async function getProfileByUserId(userId: string): Promise<HRProfileDocument> {
