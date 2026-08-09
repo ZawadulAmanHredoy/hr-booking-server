@@ -13,6 +13,7 @@ import { Booking } from '../src/models/Booking.js'
 import { AuditLog } from '../src/models/AuditLog.js'
 import { Report } from '../src/models/Report.js'
 import { Specialization } from '../src/models/Specialization.js'
+import { getEmailQueue } from '../src/queues/email.queue.js'
 
 const app = createApp()
 
@@ -325,6 +326,20 @@ describe('Admin delete user', () => {
 })
 
 describe('Admin HR profile review', () => {
+  it('emails every admin when a profile is submitted for review', async () => {
+    const admin = await createUser(USER_ROLES.ADMIN, `${prefix}-notify-admin@example.com`)
+    const hr = await createUser(USER_ROLES.HR, `${prefix}-notify-hr@example.com`)
+
+    await submitProfile(hr.id)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    const jobs = await getEmailQueue().getJobs(['waiting', 'delayed', 'active', 'completed'])
+    const notice = jobs.find(
+      (j) => j.data.to === admin.email && j.data.subject === 'New HR application awaiting review',
+    )
+    expect(notice).toBeDefined()
+  })
+
   it('lists pending applications and approves one', async () => {
     const admin = await createUser(USER_ROLES.ADMIN, `${prefix}-approve-admin@example.com`)
     const hr = await createUser(USER_ROLES.HR, `${prefix}-approve-hr@example.com`)

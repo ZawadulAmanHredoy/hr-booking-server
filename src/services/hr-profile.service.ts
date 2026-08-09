@@ -12,6 +12,7 @@ import { assertActiveSpecializations } from './specialization.service.js'
 import { recordAuditLog } from './audit-log.service.js'
 import { enqueueEmail } from './email/index.js'
 import {
+  buildNewApplicationNotice,
   buildProfileApproved,
   buildProfileRejected,
 } from './email/templates/hr-profile.templates.js'
@@ -102,7 +103,31 @@ export async function submitProfileForReview(userId: string): Promise<HRProfileD
   profile.status = PROFILE_STATUS.PENDING_REVIEW
   profile.rejectionReason = undefined
   await profile.save()
+
+  await notifyAdminsOfNewApplication(userId, profile.headline)
+
   return profile
+}
+
+/** Every ADMIN/SUPER_ADMIN gets an email when an application is waiting on them. */
+async function notifyAdminsOfNewApplication(applicantId: string, headline: string): Promise<void> {
+  try {
+    const [applicant, admins] = await Promise.all([
+      User.findById(applicantId).select('firstName lastName'),
+      User.find({ role: { $in: [USER_ROLES.ADMIN, USER_ROLES.SUPER_ADMIN] } }).select('email'),
+    ])
+    if (!applicant || admins.length === 0) return
+
+    const applicantName = `${applicant.firstName} ${applicant.lastName}`.trim()
+    for (const admin of admins) {
+      enqueueEmail({ to: admin.email, ...buildNewApplicationNotice(applicantName, headline) })
+    }
+  } catch (err) {
+    logger.warn(
+      { applicantId, err: err instanceof Error ? err.message : err },
+      'Failed to notify admins of a new HR application',
+    )
+  }
 }
 
 /** HR pulls a pending or live profile back to draft — e.g. to pause bookings or make edits. */

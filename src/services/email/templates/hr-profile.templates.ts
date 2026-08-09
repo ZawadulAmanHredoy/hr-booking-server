@@ -28,12 +28,31 @@ function esc(value: string): string {
 
 export function buildProfileApproved(name: string): { subject: string; html: string } {
   return {
-    subject: 'Your HR profile is now live',
+    subject: 'Your HR consultant profile has been approved',
     html: layout(
       `Hi ${esc(name)},`,
       `
-        <p>Good news — your consultant profile has been reviewed and approved. It's now visible in the public directory and can accept bookings.</p>
+        <p>We're pleased to let you know that your HR consultant profile has been reviewed and approved. It is now live in our public directory and ready to accept consultation bookings.</p>
+        <p>Thank you for joining HR Booking — we look forward to helping you connect with clients.</p>
         ${ctaButton(`${env.CLIENT_URL}/profile/manage`, 'View your profile')}
+      `,
+    ),
+  }
+}
+
+/** Sent to every ADMIN/SUPER_ADMIN when an HR profile is submitted (or resubmitted) for review. */
+export function buildNewApplicationNotice(
+  applicantName: string,
+  headline: string,
+): { subject: string; html: string } {
+  return {
+    subject: 'New HR application awaiting review',
+    html: layout(
+      'Hi,',
+      `
+        <p><strong>${esc(applicantName)}</strong> has submitted an HR consultant application for review.</p>
+        <p style="color:#6b7280;font-size:13px;">Headline: ${esc(headline)}</p>
+        ${ctaButton(`${env.CLIENT_URL}/admin/hr`, 'Review application')}
       `,
     ),
   }
