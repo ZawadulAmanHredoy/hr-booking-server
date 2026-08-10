@@ -66,7 +66,7 @@ export function authRateLimiter(): RequestHandler {
   }
   return rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: isProduction ? 10 : 100,
+    limit: isProduction ? 50 : 100,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: {

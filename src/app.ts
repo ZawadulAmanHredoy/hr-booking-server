@@ -20,6 +20,11 @@ export function createApp(): express.Express {
 
   app.disable('x-powered-by')
 
+  // Render (and other hosting providers) terminate TLS and forward requests through a proxy.
+  // Without trusting the X-Forwarded-For header, every visitor shares the proxy's IP, so
+  // rate limits (keyed by req.ip) are applied to all users combined instead of per client.
+  app.set('trust proxy', 1)
+
   app.use(requestId)
   app.use(
     pinoHttp({
